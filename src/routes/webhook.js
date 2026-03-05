@@ -120,6 +120,17 @@ router.post("/debug", async (req, res) => {
   }
 });
 
+// Capture endpoint — logs exactly what GHL sends so we can see field names
+let lastPayload = null;
+router.post("/capture", (req, res) => {
+  lastPayload = { receivedAt: new Date().toISOString(), body: req.body };
+  console.log("CAPTURED PAYLOAD:", JSON.stringify(req.body, null, 2));
+  res.json({ captured: true });
+});
+router.get("/capture", (req, res) => {
+  res.json(lastPayload || { message: "No payload captured yet. Send a test webhook to /webhook/capture first." });
+});
+
 // Test endpoint to verify the webhook is reachable
 router.get("/test", (req, res) => {
   res.json({
