@@ -80,6 +80,46 @@ router.post("/inbound", async (req, res) => {
   }
 });
 
+// Debug endpoint — runs the full flow synchronously and returns errors
+router.post("/debug", async (req, res) => {
+  const steps = {};
+  try {
+    // 1. Check env vars
+    steps.env = {
+      OPENAI_API_KEY: process.env.OPENAI_API_KEY ? "set (" + process.env.OPENAI_API_KEY.slice(0, 8) + "...)" : "MISSING",
+      OPENAI_ASSISTANT_ID: process.env.OPENAI_ASSISTANT_ID || "MISSING",
+      GHL_API_KEY: process.env.GHL_API_KEY ? "set (" + process.env.GHL_API_KEY.slice(0, 8) + "...)" : "MISSING",
+      DATABASE_URL: process.env.DATABASE_URL ? "set" : "MISSING",
+    };
+
+    // 2. Extract payload
+    const body = req.body;
+    const contactId = body.contactId || body.contact_id || "debug-test";
+    const message = body.message || "Hello, this is a debug test";
+    steps.payload = { contactId, message };
+
+    // 3. Try OpenAI
+    steps.openai = "calling...";
+    const reply = await chat(contactId, message);
+    steps.openai = { success: true, reply };
+
+    // 4. Try GHL reply
+    if (process.env.GHL_API_KEY && body.contactId) {
+      steps.ghl = "calling...";
+      const locationId = body.locationId || body.location_id;
+      await sendReply(contactId, reply, locationId);
+      steps.ghl = { success: true };
+    } else {
+      steps.ghl = "skipped (no GHL_API_KEY or no real contactId)";
+    }
+
+    res.json({ success: true, steps });
+  } catch (error) {
+    steps.error = { message: error.message, stack: error.stack?.split("\n").slice(0, 3) };
+    res.status(500).json({ success: false, steps });
+  }
+});
+
 // Test endpoint to verify the webhook is reachable
 router.get("/test", (req, res) => {
   res.json({
