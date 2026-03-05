@@ -38,14 +38,14 @@ router.post("/inbound", async (req, res) => {
       return res.json({ skipped: true, reason: "duplicate" });
     }
 
-    // --- EXTRACT PAYLOAD ---
-    const contactId = body.contactId || body.contact_id || body.contact?.id;
+    // --- EXTRACT PAYLOAD (matched to actual GHL webhook structure) ---
+    const contactId = body.contact_id || body.contactId || body.contact?.id;
     const message =
-      body.message ||
+      body.message?.body ||       // GHL sends { message: { type: 11, body: "HEY" } }
+      (typeof body.message === "string" ? body.message : null) ||
       body.body ||
-      body.messageBody ||
-      body.payload?.message?.body;
-    const locationId = body.locationId || body.location_id;
+      body.messageBody;
+    const locationId = body.location?.id || body.locationId || body.location_id;
 
     if (!contactId || !message) {
       return res.status(400).json({
