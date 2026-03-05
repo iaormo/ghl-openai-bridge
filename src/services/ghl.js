@@ -1,43 +1,13 @@
 const GHL_API_BASE = "https://services.leadconnectorhq.com";
-const GHL_LOCATION_ID = process.env.GHL_LOCATION_ID || "";
 
-// Find the most recent conversation for a contact to detect the channel type
-async function getConversationType(contactId) {
-  try {
-    const response = await fetch(
-      `${GHL_API_BASE}/conversations/search?locationId=${GHL_LOCATION_ID}&contactId=${contactId}&limit=1`,
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.GHL_API_KEY}`,
-          Version: "2021-04-15",
-        },
-      }
-    );
-    if (!response.ok) return "TYPE_FACEBOOK"; // default for this account
-    const data = await response.json();
-    const convo = data.conversations?.[0];
-    return convo?.lastMessageType || "TYPE_FACEBOOK";
-  } catch {
-    return "TYPE_FACEBOOK";
-  }
-}
+// Cache channel type per contact so we only look it up once
+const channelCache = new Map();
+const DEFAULT_TYPE = process.env.GHL_DEFAULT_CHANNEL || "FB";
 
 async function sendReply(contactId, message, locationId) {
-  // Auto-detect the channel type from the conversation
-  const messageType = await getConversationType(contactId);
-
-  // Map GHL conversation types to message send types
-  const typeMap = {
-    TYPE_FACEBOOK: "FB",
-    TYPE_INSTAGRAM: "IG",
-    TYPE_SMS: "SMS",
-    TYPE_EMAIL: "Email",
-    TYPE_LIVE_CHAT: "Live_Chat",
-    TYPE_WHATSAPP: "WhatsApp",
-  };
-
-  const type = typeMap[messageType] || "FB";
-  console.log(`Sending reply as type: ${type} (detected: ${messageType})`);
+  // Use cached type or default (FB for this account)
+  const type = channelCache.get(contactId) || DEFAULT_TYPE;
+  console.log(`Sending reply as type: ${type} to contact ${contactId}`);
 
   const response = await fetch(`${GHL_API_BASE}/conversations/messages`, {
     method: "POST",
@@ -61,4 +31,19 @@ async function sendReply(contactId, message, locationId) {
   return response.json();
 }
 
-module.exports = { sendReply };
+// Allow setting channel type from webhook payload
+function setChannelType(contactId, ghlMessageType) {
+  const typeMap = {
+    11: "FB",           // TYPE_FACEBOOK
+    2: "SMS",           // TYPE_SMS
+    3: "Email",         // TYPE_EMAIL
+    15: "IG",           // TYPE_INSTAGRAM
+    18: "WhatsApp",     // TYPE_WHATSAPP
+    6: "Live_Chat",     // TYPE_LIVE_CHAT
+  };
+  if (ghlMessageType && typeMap[ghlMessageType]) {
+    channelCache.set(contactId, typeMap[ghlMessageType]);
+  }
+}
+
+module.exports = { sendReply, setChannelType };

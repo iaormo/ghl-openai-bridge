@@ -1,6 +1,6 @@
 const express = require("express");
 const { chat } = require("../services/openai");
-const { sendReply } = require("../services/ghl");
+const { sendReply, setChannelType } = require("../services/ghl");
 
 const router = express.Router();
 
@@ -54,6 +54,10 @@ router.post("/inbound", async (req, res) => {
         hint: "Webhook payload must include contactId and message fields",
       });
     }
+
+    // Cache the channel type from the GHL payload (type 11 = FB, etc.)
+    const msgType = body.message?.type;
+    if (msgType) setChannelType(contactId, msgType);
 
     console.log(`Incoming message from contact ${contactId}: ${message}`);
 

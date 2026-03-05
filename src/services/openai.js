@@ -19,47 +19,35 @@ async function getOrCreateThread(contactId) {
   return thread.id;
 }
 
-async function sendMessage(threadId, message) {
-  await getClient().beta.threads.messages.create(threadId, {
-    role: "user",
-    content: message,
-  });
-}
-
-async function runAssistant(threadId) {
-  const run = await getClient().beta.threads.runs.createAndPoll(threadId, {
-    assistant_id: process.env.OPENAI_ASSISTANT_ID,
-  });
-
-  if (run.status !== "completed") {
-    throw new Error(`Assistant run failed with status: ${run.status}`);
-  }
-
-  return run.id;
-}
-
-async function getLatestReply(threadId, runId) {
-  const messages = await getClient().beta.threads.messages.list(threadId, {
-    run_id: runId,
-    limit: 1,
-  });
-
-  const reply = messages.data[0];
-  if (!reply || reply.role !== "assistant") {
-    throw new Error("No assistant reply found");
-  }
-
-  return reply.content
-    .filter((block) => block.type === "text")
-    .map((block) => block.text.value)
-    .join("\n");
-}
-
 async function chat(contactId, message) {
   const threadId = await getOrCreateThread(contactId);
-  await sendMessage(threadId, message);
-  const runId = await runAssistant(threadId);
-  return getLatestReply(threadId, runId);
+
+  // Add message and run assistant in one call using stream for faster response
+  const stream = await getClient().beta.threads.runs.stream(threadId, {
+    assistant_id: process.env.OPENAI_ASSISTANT_ID,
+    additional_messages: [{ role: "user", content: message }],
+  });
+
+  // Collect the full text from the stream
+  let reply = "";
+  for await (const event of stream) {
+    if (
+      event.event === "thread.message.delta" &&
+      event.data?.delta?.content
+    ) {
+      for (const block of event.data.delta.content) {
+        if (block.type === "text") {
+          reply += block.text.value;
+        }
+      }
+    }
+  }
+
+  if (!reply) {
+    throw new Error("No assistant reply received");
+  }
+
+  return reply;
 }
 
 module.exports = { chat };
