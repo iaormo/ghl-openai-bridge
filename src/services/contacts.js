@@ -1,0 +1,102 @@
+const GHL_API_BASE = "https://services.leadconnectorhq.com";
+const LOCATION_ID = process.env.GHL_LOCATION_ID || "JYNTUGxvUZVoROmjpf50";
+
+function headers(version = "2021-07-28") {
+  return {
+    Authorization: `Bearer ${process.env.GHL_API_KEY}`,
+    "Content-Type": "application/json",
+    Version: version,
+  };
+}
+
+// Get contact information by ID
+async function getContactInfo(contactId) {
+  const response = await fetch(
+    `${GHL_API_BASE}/contacts/${contactId}`,
+    { headers: headers() }
+  );
+
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`Failed to get contact: ${err}`);
+  }
+
+  const data = await response.json();
+  const c = data.contact || data;
+  return {
+    id: c.id,
+    firstName: c.firstName || c.firstNameRaw || "",
+    lastName: c.lastName || c.lastNameRaw || "",
+    fullName: c.contactName || `${c.firstName || ""} ${c.lastName || ""}`.trim(),
+    email: c.email || "",
+    phone: c.phone || "",
+    tags: c.tags || [],
+    customFields: c.customFields || [],
+  };
+}
+
+// Update contact name and/or phone
+async function updateContactInfo(contactId, { firstName, lastName, phone, email, name }) {
+  const body = {};
+
+  if (name) {
+    const parts = name.trim().split(/\s+/);
+    body.firstName = parts[0];
+    body.lastName = parts.slice(1).join(" ") || "";
+  }
+  if (firstName) body.firstName = firstName;
+  if (lastName) body.lastName = lastName;
+  if (phone) body.phone = phone.replace(/[\s-]/g, "");
+  if (email) body.email = email;
+
+  const response = await fetch(
+    `${GHL_API_BASE}/contacts/${contactId}`,
+    {
+      method: "PUT",
+      headers: headers(),
+      body: JSON.stringify(body),
+    }
+  );
+
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`Failed to update contact: ${err}`);
+  }
+
+  const data = await response.json();
+  return { success: true, contact: data.contact || data };
+}
+
+// Update a custom field on a contact
+async function updateCustomField(contactId, key, value) {
+  // First, get existing custom fields to find the field ID
+  const contact = await getContactInfo(contactId);
+  const existingFields = contact.customFields || [];
+
+  // Try to find the field by key name
+  const existing = existingFields.find(
+    (f) => f.key === key || f.fieldKey === key || f.id === key
+  );
+
+  const customFields = existing
+    ? [{ id: existing.id, value }]
+    : [{ key, field_value: value }];
+
+  const response = await fetch(
+    `${GHL_API_BASE}/contacts/${contactId}`,
+    {
+      method: "PUT",
+      headers: headers(),
+      body: JSON.stringify({ customFields }),
+    }
+  );
+
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`Failed to update custom field: ${err}`);
+  }
+
+  return { success: true, key, value };
+}
+
+module.exports = { getContactInfo, updateContactInfo, updateCustomField };

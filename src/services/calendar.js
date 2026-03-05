@@ -19,9 +19,8 @@ function dateToTimestamp(dateStr) {
 
 // Get available slots for a date range
 async function getAvailableSlots(startDate, endDate) {
-  // endDate should be the day AFTER to include the full end date
   const start = dateToTimestamp(startDate);
-  const endPlusOne = dateToTimestamp(endDate) + 86400000; // +1 day
+  const endPlusOne = dateToTimestamp(endDate) + 86400000;
 
   const url = `${GHL_API_BASE}/calendars/${CALENDAR_ID}/free-slots?startDate=${start}&endDate=${endPlusOne}&timezone=${TIMEZONE}`;
   const response = await fetch(url, { headers: headers() });
@@ -32,19 +31,20 @@ async function getAvailableSlots(startDate, endDate) {
   }
 
   const data = await response.json();
-
-  // Format slots nicely
   const result = {};
   for (const [date, info] of Object.entries(data)) {
     if (date === "traceId") continue;
     result[date] = (info.slots || []).map((slot) => {
       const d = new Date(slot);
-      return d.toLocaleTimeString("en-PH", {
-        hour: "numeric",
-        minute: "2-digit",
-        hour12: true,
-        timeZone: TIMEZONE,
-      });
+      return {
+        iso: slot,
+        display: d.toLocaleTimeString("en-PH", {
+          hour: "numeric",
+          minute: "2-digit",
+          hour12: true,
+          timeZone: TIMEZONE,
+        }),
+      };
     });
   }
   return result;
@@ -78,4 +78,78 @@ async function bookAppointment(contactId, slotDateTime, title) {
   return response.json();
 }
 
-module.exports = { getAvailableSlots, bookAppointment, TIMEZONE };
+// Get appointments for a contact
+async function getContactAppointments(contactId) {
+  const response = await fetch(
+    `${GHL_API_BASE}/contacts/${contactId}/appointments`,
+    { headers: headers() }
+  );
+
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`Failed to get appointments: ${err}`);
+  }
+
+  const data = await response.json();
+  const now = new Date();
+
+  // Return upcoming appointments only
+  return (data.events || data.appointments || [])
+    .filter((a) => new Date(a.startTime || a.start) > now)
+    .map((a) => ({
+      id: a.id,
+      title: a.title,
+      startTime: a.startTime || a.start,
+      endTime: a.endTime || a.end,
+      status: a.appointmentStatus || a.status,
+    }));
+}
+
+// Reschedule an appointment
+async function rescheduleAppointment(appointmentId, newDateTime) {
+  const startTime = new Date(newDateTime).toISOString();
+
+  const response = await fetch(
+    `${GHL_API_BASE}/calendars/events/appointments/${appointmentId}`,
+    {
+      method: "PUT",
+      headers: headers(),
+      body: JSON.stringify({ startTime }),
+    }
+  );
+
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`Failed to reschedule: ${err}`);
+  }
+
+  return response.json();
+}
+
+// Cancel an appointment
+async function cancelAppointment(appointmentId) {
+  const response = await fetch(
+    `${GHL_API_BASE}/calendars/events/appointments/${appointmentId}`,
+    {
+      method: "PUT",
+      headers: headers(),
+      body: JSON.stringify({ appointmentStatus: "cancelled" }),
+    }
+  );
+
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`Failed to cancel: ${err}`);
+  }
+
+  return response.json();
+}
+
+module.exports = {
+  getAvailableSlots,
+  bookAppointment,
+  getContactAppointments,
+  rescheduleAppointment,
+  cancelAppointment,
+  TIMEZONE,
+};

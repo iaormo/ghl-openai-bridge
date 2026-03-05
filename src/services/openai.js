@@ -1,6 +1,18 @@
 const OpenAI = require("openai");
 const { getHistory, saveMessage } = require("../db");
-const { getAvailableSlots, bookAppointment, TIMEZONE } = require("./calendar");
+const {
+  getAvailableSlots,
+  bookAppointment,
+  getContactAppointments,
+  rescheduleAppointment,
+  cancelAppointment,
+  TIMEZONE,
+} = require("./calendar");
+const {
+  getContactInfo,
+  updateContactInfo,
+  updateCustomField,
+} = require("./contacts");
 
 let openai = null;
 let systemPrompt = null;
@@ -27,39 +39,67 @@ async function getSystemPrompt() {
     systemPrompt = "You are a helpful assistant.";
   }
 
-  // Append calendar context
-  const today = new Date().toLocaleDateString("en-PH", { timeZone: TIMEZONE });
-  systemPrompt += `\n\nIMPORTANT CALENDAR INFO:
-- Today's date is ${today}. Timezone is ${TIMEZONE} (Asia/Manila).
-- You can check available appointment slots and book appointments.
-- When a customer wants to book, first ask what service and preferred date.
-- Then call check_available_slots to show them open times.
-- Once they pick a time, call book_appointment to confirm.
-- Always confirm the date, time and service before booking.
-- Use 24-hour ISO format for dates (e.g. 2026-03-08).`;
-
   return systemPrompt;
 }
 
-// OpenAI function definitions for calendar
+// All OpenAI function tool definitions
 const tools = [
   {
     type: "function",
     function: {
-      name: "check_available_slots",
-      description:
-        "Check available appointment slots for a date range. Use this when a customer asks about availability or wants to book.",
+      name: "getCurrentDate",
+      description: "Get the current date and time in Manila timezone (UTC+8). Call this at the start of a conversation.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "getContactInformation",
+      description: "Retrieve the customer's existing contact information (name, phone, email, tags, custom fields) from the system.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "updateContactInfo",
+      description: "Update the customer's name and/or phone number. MUST be called immediately when a customer provides their name or phone number.",
       parameters: {
         type: "object",
         properties: {
-          start_date: {
-            type: "string",
-            description: "Start date in YYYY-MM-DD format",
-          },
-          end_date: {
-            type: "string",
-            description: "End date in YYYY-MM-DD format (defaults to same as start_date if checking a single day)",
-          },
+          name: { type: "string", description: "Customer's full name" },
+          phone: { type: "string", description: "Customer's phone number (e.g. 09171234567)" },
+          email: { type: "string", description: "Customer's email address" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "updateCustomField",
+      description: "Update a custom field on the contact record. Use key 'availed_service' to track which service(s) the customer is interested in.",
+      parameters: {
+        type: "object",
+        properties: {
+          key: { type: "string", description: "The custom field key (e.g. 'availed_service', 'booking_notes')" },
+          value: { type: "string", description: "The value to set" },
+        },
+        required: ["key", "value"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "getAvailableSlots",
+      description: "Check available appointment time slots for a specific date. Returns all open 30-minute slots.",
+      parameters: {
+        type: "object",
+        properties: {
+          start_date: { type: "string", description: "Date in YYYY-MM-DD format" },
+          end_date: { type: "string", description: "End date in YYYY-MM-DD format (optional, defaults to start_date)" },
         },
         required: ["start_date"],
       },
@@ -68,23 +108,54 @@ const tools = [
   {
     type: "function",
     function: {
-      name: "book_appointment",
-      description:
-        "Book an appointment for the customer at a specific date and time. Only call this after the customer confirms the slot.",
+      name: "appointmentBooking",
+      description: "Book an appointment for the customer. Requires contact name, phone, service, date and time. Only call after the customer confirms the slot.",
       parameters: {
         type: "object",
         properties: {
-          date_time: {
-            type: "string",
-            description:
-              "The appointment date and time in ISO format, e.g. 2026-03-08T14:00:00+08:00",
-          },
-          service: {
-            type: "string",
-            description: "The service being booked (e.g. Classic Lash Extensions)",
-          },
+          date_time: { type: "string", description: "Appointment date and time in ISO format (e.g. 2026-03-08T14:00:00+08:00)" },
+          service: { type: "string", description: "The service being booked" },
+          customer_name: { type: "string", description: "Customer's name for the appointment title" },
+          phone: { type: "string", description: "Customer's phone number" },
         },
-        required: ["date_time"],
+        required: ["date_time", "service"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "getContactAppointments",
+      description: "Get the customer's upcoming appointments. Use for reschedule or cancellation requests.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "rescheduleAppointment",
+      description: "Reschedule an existing appointment to a new date/time.",
+      parameters: {
+        type: "object",
+        properties: {
+          appointment_id: { type: "string", description: "The appointment ID to reschedule" },
+          new_date_time: { type: "string", description: "New date and time in ISO format" },
+        },
+        required: ["appointment_id", "new_date_time"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "cancelAppointment",
+      description: "Cancel an existing appointment.",
+      parameters: {
+        type: "object",
+        properties: {
+          appointment_id: { type: "string", description: "The appointment ID to cancel" },
+        },
+        required: ["appointment_id"],
       },
     },
   },
@@ -93,29 +164,73 @@ const tools = [
 // Execute a tool call
 async function executeTool(toolCall, contactId) {
   const name = toolCall.function.name;
-  const args = JSON.parse(toolCall.function.arguments);
+  const args = JSON.parse(toolCall.function.arguments || "{}");
 
-  if (name === "check_available_slots") {
-    const startDate = args.start_date;
-    const endDate = args.end_date || args.start_date;
-    const slots = await getAvailableSlots(startDate, endDate);
-    return JSON.stringify(slots);
+  try {
+    switch (name) {
+      case "getCurrentDate": {
+        const now = new Date().toLocaleString("en-PH", {
+          timeZone: TIMEZONE,
+          weekday: "long",
+          year: "numeric",
+          month: "long",
+          day: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+          hour12: true,
+        });
+        return JSON.stringify({ currentDate: now, timezone: TIMEZONE });
+      }
+
+      case "getContactInformation": {
+        const info = await getContactInfo(contactId);
+        return JSON.stringify(info);
+      }
+
+      case "updateContactInfo": {
+        const result = await updateContactInfo(contactId, args);
+        return JSON.stringify(result);
+      }
+
+      case "updateCustomField": {
+        const result = await updateCustomField(contactId, args.key, args.value);
+        return JSON.stringify(result);
+      }
+
+      case "getAvailableSlots": {
+        const endDate = args.end_date || args.start_date;
+        const slots = await getAvailableSlots(args.start_date, endDate);
+        return JSON.stringify(slots);
+      }
+
+      case "appointmentBooking": {
+        const title = `${args.customer_name || "Customer"} x Breys - ${args.service}`;
+        const result = await bookAppointment(contactId, args.date_time, title);
+        return JSON.stringify({ success: true, appointmentId: result.id || result.appointmentId, ...result });
+      }
+
+      case "getContactAppointments": {
+        const appts = await getContactAppointments(contactId);
+        return JSON.stringify(appts);
+      }
+
+      case "rescheduleAppointment": {
+        const result = await rescheduleAppointment(args.appointment_id, args.new_date_time);
+        return JSON.stringify({ success: true, ...result });
+      }
+
+      case "cancelAppointment": {
+        const result = await cancelAppointment(args.appointment_id);
+        return JSON.stringify({ success: true, ...result });
+      }
+
+      default:
+        return JSON.stringify({ error: `Unknown function: ${name}` });
+    }
+  } catch (err) {
+    console.error(`Tool ${name} error:`, err.message);
+    return JSON.stringify({ error: err.message });
   }
-
-  if (name === "book_appointment") {
-    const result = await bookAppointment(
-      contactId,
-      args.date_time,
-      args.service || "Appointment"
-    );
-    return JSON.stringify({
-      success: true,
-      appointmentId: result.id,
-      message: "Appointment booked successfully",
-    });
-  }
-
-  return JSON.stringify({ error: "Unknown tool" });
 }
 
 async function chat(contactId, message) {
@@ -130,7 +245,6 @@ async function chat(contactId, message) {
     { role: "user", content: message },
   ];
 
-  // First call — may return tool calls
   let response = await getClient().chat.completions.create({
     model: process.env.OPENAI_MODEL || "gpt-4o-mini",
     messages,
@@ -140,16 +254,17 @@ async function chat(contactId, message) {
 
   let choice = response.choices[0];
 
-  // Handle tool calls (up to 3 rounds)
+  // Handle tool calls (up to 5 rounds for multi-step flows)
   let rounds = 0;
-  while (choice.finish_reason === "tool_calls" && rounds < 3) {
+  while (choice.finish_reason === "tool_calls" && rounds < 5) {
     rounds++;
     const toolCalls = choice.message.tool_calls;
     messages.push(choice.message);
 
     for (const tc of toolCalls) {
-      console.log(`Tool call: ${tc.function.name}(${tc.function.arguments})`);
+      console.log(`Tool: ${tc.function.name}(${tc.function.arguments})`);
       const result = await executeTool(tc, contactId);
+      console.log(`Result: ${result.slice(0, 200)}`);
       messages.push({
         role: "tool",
         tool_call_id: tc.id,
@@ -169,7 +284,6 @@ async function chat(contactId, message) {
   const reply = choice.message?.content;
   if (!reply) throw new Error("No reply from OpenAI");
 
-  // Save messages to DB
   await Promise.all([
     saveMessage(contactId, "user", message),
     saveMessage(contactId, "assistant", reply),
