@@ -19,33 +19,41 @@ async function initDB() {
     return;
   }
   await db.query(`
-    CREATE TABLE IF NOT EXISTS threads (
+    CREATE TABLE IF NOT EXISTS messages (
       id SERIAL PRIMARY KEY,
-      contact_id TEXT UNIQUE NOT NULL,
-      thread_id TEXT NOT NULL,
+      contact_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
       created_at TIMESTAMP DEFAULT NOW()
     )
+  `);
+  await db.query(`
+    CREATE INDEX IF NOT EXISTS idx_messages_contact ON messages(contact_id, created_at DESC)
   `);
   console.log("Database initialized");
 }
 
-async function getThread(contactId) {
+// Get last N messages for a contact (for conversation context)
+async function getHistory(contactId, limit = 20) {
   const db = getPool();
-  if (!db) return null;
+  if (!db) return [];
   const result = await db.query(
-    "SELECT thread_id FROM threads WHERE contact_id = $1",
-    [contactId]
+    `SELECT role, content FROM messages
+     WHERE contact_id = $1
+     ORDER BY created_at DESC LIMIT $2`,
+    [contactId, limit]
   );
-  return result.rows[0]?.thread_id || null;
+  return result.rows.reverse(); // oldest first
 }
 
-async function saveThread(contactId, threadId) {
+// Save a message (user or assistant)
+async function saveMessage(contactId, role, content) {
   const db = getPool();
   if (!db) return;
   await db.query(
-    "INSERT INTO threads (contact_id, thread_id) VALUES ($1, $2) ON CONFLICT (contact_id) DO UPDATE SET thread_id = $2",
-    [contactId, threadId]
+    "INSERT INTO messages (contact_id, role, content) VALUES ($1, $2, $3)",
+    [contactId, role, content]
   );
 }
 
-module.exports = { getPool, initDB, getThread, saveThread };
+module.exports = { getPool, initDB, getHistory, saveMessage };

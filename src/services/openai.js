@@ -1,7 +1,8 @@
 const OpenAI = require("openai");
-const { getThread, saveThread } = require("../db");
+const { getHistory, saveMessage } = require("../db");
 
 let openai = null;
+let systemPrompt = null;
 
 function getClient() {
   if (!openai) {
@@ -10,61 +11,51 @@ function getClient() {
   return openai;
 }
 
-async function getOrCreateThread(contactId) {
-  const existingThreadId = await getThread(contactId);
-  if (existingThreadId) return existingThreadId;
+// Fetch the assistant's instructions once and cache them
+async function getSystemPrompt() {
+  if (systemPrompt) return systemPrompt;
 
-  const thread = await getClient().beta.threads.create();
-  await saveThread(contactId, thread.id);
-  return thread.id;
-}
-
-// Cancel any active runs on a thread before starting a new one
-async function cancelActiveRuns(threadId) {
   try {
-    const runs = await getClient().beta.threads.runs.list(threadId, { limit: 5 });
-    for (const run of runs.data) {
-      if (["in_progress", "queued", "requires_action"].includes(run.status)) {
-        await getClient().beta.threads.runs.cancel(threadId, run.id);
-        // Wait briefly for cancellation
-        await new Promise((r) => setTimeout(r, 500));
-      }
-    }
+    const assistant = await getClient().beta.assistants.retrieve(
+      process.env.OPENAI_ASSISTANT_ID
+    );
+    systemPrompt = assistant.instructions || "You are a helpful assistant.";
+    console.log("Loaded assistant instructions (cached)");
   } catch (err) {
-    console.warn("Error cancelling active runs:", err.message);
+    console.warn("Could not fetch assistant instructions:", err.message);
+    systemPrompt = "You are a helpful assistant.";
   }
+  return systemPrompt;
 }
 
 async function chat(contactId, message) {
-  const threadId = await getOrCreateThread(contactId);
+  const [instructions, history] = await Promise.all([
+    getSystemPrompt(),
+    getHistory(contactId, 20),
+  ]);
 
-  // Cancel any lingering runs to avoid "already has an active run" error
-  await cancelActiveRuns(threadId);
+  // Build messages array: system prompt + history + new message
+  const messages = [
+    { role: "system", content: instructions },
+    ...history,
+    { role: "user", content: message },
+  ];
 
-  // Add message and run assistant in one call using stream for faster response
-  const stream = await getClient().beta.threads.runs.stream(threadId, {
-    assistant_id: process.env.OPENAI_ASSISTANT_ID,
-    additional_messages: [{ role: "user", content: message }],
+  // Use Chat Completions (much faster than Assistants API)
+  const response = await getClient().chat.completions.create({
+    model: process.env.OPENAI_MODEL || "gpt-4o-mini",
+    messages,
+    max_tokens: 1000,
   });
 
-  // Collect the full text from the stream
-  let reply = "";
-  for await (const event of stream) {
-    if (
-      event.event === "thread.message.delta" &&
-      event.data?.delta?.content
-    ) {
-      for (const block of event.data.delta.content) {
-        if (block.type === "text") {
-          reply += block.text.value;
-        }
-      }
-    }
-  }
+  const reply = response.choices[0]?.message?.content;
+  if (!reply) throw new Error("No reply from OpenAI");
 
-  if (!reply) {
-    throw new Error("No assistant reply received");
-  }
+  // Save both messages to DB for conversation history
+  await Promise.all([
+    saveMessage(contactId, "user", message),
+    saveMessage(contactId, "assistant", reply),
+  ]);
 
   return reply;
 }
