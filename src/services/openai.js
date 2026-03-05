@@ -1,28 +1,34 @@
 const OpenAI = require("openai");
 const { getThread, saveThread } = require("../db");
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const ASSISTANT_ID = process.env.OPENAI_ASSISTANT_ID;
+let openai = null;
+
+function getClient() {
+  if (!openai) {
+    openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  }
+  return openai;
+}
 
 async function getOrCreateThread(contactId) {
   const existingThreadId = await getThread(contactId);
   if (existingThreadId) return existingThreadId;
 
-  const thread = await openai.beta.threads.create();
+  const thread = await getClient().beta.threads.create();
   await saveThread(contactId, thread.id);
   return thread.id;
 }
 
 async function sendMessage(threadId, message) {
-  await openai.beta.threads.messages.create(threadId, {
+  await getClient().beta.threads.messages.create(threadId, {
     role: "user",
     content: message,
   });
 }
 
 async function runAssistant(threadId) {
-  const run = await openai.beta.threads.runs.createAndPoll(threadId, {
-    assistant_id: ASSISTANT_ID,
+  const run = await getClient().beta.threads.runs.createAndPoll(threadId, {
+    assistant_id: process.env.OPENAI_ASSISTANT_ID,
   });
 
   if (run.status !== "completed") {
@@ -33,7 +39,7 @@ async function runAssistant(threadId) {
 }
 
 async function getLatestReply(threadId, runId) {
-  const messages = await openai.beta.threads.messages.list(threadId, {
+  const messages = await getClient().beta.threads.messages.list(threadId, {
     run_id: runId,
     limit: 1,
   });

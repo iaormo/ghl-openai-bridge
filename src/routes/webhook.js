@@ -4,11 +4,41 @@ const { sendReply } = require("../services/ghl");
 
 const router = express.Router();
 
+// Track recently processed messages to prevent duplicates
+const processed = new Map();
+const DEDUP_TTL = 60_000; // 60 seconds
+
+function isDuplicate(messageId) {
+  if (!messageId) return false;
+  if (processed.has(messageId)) return true;
+  processed.set(messageId, Date.now());
+  // Clean old entries
+  for (const [key, ts] of processed) {
+    if (Date.now() - ts > DEDUP_TTL) processed.delete(key);
+  }
+  return false;
+}
+
 router.post("/inbound", async (req, res) => {
   try {
     const body = req.body;
 
-    // Extract contact ID and message from GHL webhook payload
+    // --- LOOP PREVENTION ---
+    // 1. Ignore outbound messages (sent BY the bot/system, not by the contact)
+    const direction = body.direction || body.messageDirection || body.type;
+    if (direction === "outbound" || direction === "outgoing") {
+      console.log("Skipping outbound message (loop prevention)");
+      return res.json({ skipped: true, reason: "outbound message" });
+    }
+
+    // 2. Deduplicate by messageId so the same message isn't processed twice
+    const messageId = body.messageId || body.message_id || body.id;
+    if (isDuplicate(messageId)) {
+      console.log(`Skipping duplicate message ${messageId}`);
+      return res.json({ skipped: true, reason: "duplicate" });
+    }
+
+    // --- EXTRACT PAYLOAD ---
     const contactId = body.contactId || body.contact_id || body.contact?.id;
     const message =
       body.message ||
@@ -27,27 +57,26 @@ router.post("/inbound", async (req, res) => {
 
     console.log(`Incoming message from contact ${contactId}: ${message}`);
 
-    // Get AI response
+    // Respond immediately so GHL doesn't timeout or retry
+    res.json({ success: true, contactId, status: "processing" });
+
+    // --- PROCESS ASYNC (after response sent) ---
     const reply = await chat(contactId, message);
     console.log(`AI reply for contact ${contactId}: ${reply}`);
 
-    // Send reply back to GHL
     if (process.env.GHL_API_KEY) {
       await sendReply(contactId, reply, locationId);
       console.log(`Reply sent back to GHL for contact ${contactId}`);
     }
-
-    res.json({
-      success: true,
-      contactId,
-      reply,
-    });
   } catch (error) {
     console.error("Webhook error:", error);
-    res.status(500).json({
-      error: "Failed to process webhook",
-      message: error.message,
-    });
+    // Only send error response if headers haven't been sent yet
+    if (!res.headersSent) {
+      res.status(500).json({
+        error: "Failed to process webhook",
+        message: error.message,
+      });
+    }
   }
 });
 

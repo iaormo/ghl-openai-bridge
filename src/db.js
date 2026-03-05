@@ -1,12 +1,24 @@
 const { Pool } = require("pg");
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : false,
-});
+let pool = null;
+
+function getPool() {
+  if (!pool && process.env.DATABASE_URL) {
+    pool = new Pool({
+      connectionString: process.env.DATABASE_URL,
+      ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : false,
+    });
+  }
+  return pool;
+}
 
 async function initDB() {
-  await pool.query(`
+  const db = getPool();
+  if (!db) {
+    console.warn("DATABASE_URL not set — skipping DB init");
+    return;
+  }
+  await db.query(`
     CREATE TABLE IF NOT EXISTS threads (
       id SERIAL PRIMARY KEY,
       contact_id TEXT UNIQUE NOT NULL,
@@ -18,7 +30,9 @@ async function initDB() {
 }
 
 async function getThread(contactId) {
-  const result = await pool.query(
+  const db = getPool();
+  if (!db) return null;
+  const result = await db.query(
     "SELECT thread_id FROM threads WHERE contact_id = $1",
     [contactId]
   );
@@ -26,10 +40,12 @@ async function getThread(contactId) {
 }
 
 async function saveThread(contactId, threadId) {
-  await pool.query(
+  const db = getPool();
+  if (!db) return;
+  await db.query(
     "INSERT INTO threads (contact_id, thread_id) VALUES ($1, $2) ON CONFLICT (contact_id) DO UPDATE SET thread_id = $2",
     [contactId, threadId]
   );
 }
 
-module.exports = { pool, initDB, getThread, saveThread };
+module.exports = { getPool, initDB, getThread, saveThread };
