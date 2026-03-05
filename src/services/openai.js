@@ -233,14 +233,44 @@ async function executeTool(toolCall, contactId) {
   }
 }
 
+// Get current Manila date/time string to inject into every request
+function getManilaDateContext() {
+  const now = new Date();
+  const dateStr = now.toLocaleDateString("en-PH", {
+    timeZone: TIMEZONE,
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+  const timeStr = now.toLocaleTimeString("en-PH", {
+    timeZone: TIMEZONE,
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+  // Also compute upcoming day-of-week references
+  const days = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(now.getTime() + i * 86400000);
+    days.push(
+      `${d.toLocaleDateString("en-PH", { weekday: "long", timeZone: TIMEZONE })} = ${d.toLocaleDateString("en-PH", { year: "numeric", month: "2-digit", day: "2-digit", timeZone: TIMEZONE })}`
+    );
+  }
+  return `\n\nCURRENT DATE/TIME (Manila, UTC+8): ${dateStr}, ${timeStr}\nUpcoming days:\n${days.join("\n")}`;
+}
+
 async function chat(contactId, message) {
   const [instructions, history] = await Promise.all([
     getSystemPrompt(),
     getHistory(contactId, 20),
   ]);
 
+  // Inject fresh Manila date context into every request
+  const systemContent = instructions + getManilaDateContext();
+
   const messages = [
-    { role: "system", content: instructions },
+    { role: "system", content: systemContent },
     ...history,
     { role: "user", content: message },
   ];
