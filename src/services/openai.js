@@ -19,8 +19,27 @@ async function getOrCreateThread(contactId) {
   return thread.id;
 }
 
+// Cancel any active runs on a thread before starting a new one
+async function cancelActiveRuns(threadId) {
+  try {
+    const runs = await getClient().beta.threads.runs.list(threadId, { limit: 5 });
+    for (const run of runs.data) {
+      if (["in_progress", "queued", "requires_action"].includes(run.status)) {
+        await getClient().beta.threads.runs.cancel(threadId, run.id);
+        // Wait briefly for cancellation
+        await new Promise((r) => setTimeout(r, 500));
+      }
+    }
+  } catch (err) {
+    console.warn("Error cancelling active runs:", err.message);
+  }
+}
+
 async function chat(contactId, message) {
   const threadId = await getOrCreateThread(contactId);
+
+  // Cancel any lingering runs to avoid "already has an active run" error
+  await cancelActiveRuns(threadId);
 
   // Add message and run assistant in one call using stream for faster response
   const stream = await getClient().beta.threads.runs.stream(threadId, {
