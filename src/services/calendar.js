@@ -17,6 +17,29 @@ function dateToTimestamp(dateStr) {
   return new Date(y, m - 1, d).getTime();
 }
 
+// Format a date string for display in Manila time
+function formatDisplay(dateStr) {
+  // GHL returns "2026-03-06 14:00:00" (no timezone) — treat as Manila time
+  const d = dateStr.includes("+") || dateStr.includes("Z")
+    ? new Date(dateStr)
+    : new Date(dateStr + "+08:00");
+  return {
+    date: d.toLocaleDateString("en-PH", {
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+      timeZone: TIMEZONE,
+    }),
+    time: d.toLocaleTimeString("en-PH", {
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+      timeZone: TIMEZONE,
+    }),
+  };
+}
+
 // Get available slots for a date range
 async function getAvailableSlots(startDate, endDate) {
   const start = dateToTimestamp(startDate);
@@ -52,7 +75,10 @@ async function getAvailableSlots(startDate, endDate) {
 
 // Book an appointment
 async function bookAppointment(contactId, slotDateTime, title) {
-  const startTime = new Date(slotDateTime).toISOString();
+  // Keep the timezone offset if provided, otherwise assume Manila
+  const startTime = slotDateTime.includes("+") || slotDateTime.includes("Z")
+    ? slotDateTime
+    : slotDateTime + "+08:00";
 
   const response = await fetch(
     `${GHL_API_BASE}/calendars/events/appointments`,
@@ -91,23 +117,41 @@ async function getContactAppointments(contactId) {
   }
 
   const data = await response.json();
-  const now = new Date();
 
-  // Return upcoming appointments only
-  return (data.events || data.appointments || [])
-    .filter((a) => new Date(a.startTime || a.start) > now)
-    .map((a) => ({
-      id: a.id,
-      title: a.title,
-      startTime: a.startTime || a.start,
-      endTime: a.endTime || a.end,
-      status: a.appointmentStatus || a.status,
-    }));
+  // GHL returns startTime as "2026-03-06 14:00:00" without timezone
+  // Treat as Manila time for comparison
+  const nowManila = new Date().toLocaleString("en-US", { timeZone: TIMEZONE });
+  const now = new Date(nowManila);
+
+  return (data.events || [])
+    .filter((a) => {
+      const raw = a.startTime || a.start;
+      // Parse as Manila time
+      const apptDate = raw.includes("+") || raw.includes("Z")
+        ? new Date(raw)
+        : new Date(raw + "+08:00");
+      return apptDate > now && a.appointmentStatus !== "cancelled";
+    })
+    .map((a) => {
+      const raw = a.startTime || a.start;
+      const display = formatDisplay(raw);
+      return {
+        id: a.id,
+        title: a.title,
+        date: display.date,
+        time: display.time,
+        startTimeRaw: raw,
+        status: a.appointmentStatus || a.status,
+      };
+    });
 }
 
 // Reschedule an appointment
 async function rescheduleAppointment(appointmentId, newDateTime) {
-  const startTime = new Date(newDateTime).toISOString();
+  // Send with Manila timezone offset
+  const startTime = newDateTime.includes("+") || newDateTime.includes("Z")
+    ? newDateTime
+    : newDateTime + "+08:00";
 
   const response = await fetch(
     `${GHL_API_BASE}/calendars/events/appointments/${appointmentId}`,
@@ -123,7 +167,12 @@ async function rescheduleAppointment(appointmentId, newDateTime) {
     throw new Error(`Failed to reschedule: ${err}`);
   }
 
-  return response.json();
+  const result = await response.json();
+  return {
+    success: true,
+    appointmentId: result.id,
+    newTime: startTime,
+  };
 }
 
 // Cancel an appointment
@@ -142,7 +191,7 @@ async function cancelAppointment(appointmentId) {
     throw new Error(`Failed to cancel: ${err}`);
   }
 
-  return response.json();
+  return { success: true, appointmentId };
 }
 
 module.exports = {
