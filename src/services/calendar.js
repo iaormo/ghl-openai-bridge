@@ -11,12 +11,19 @@ function headers() {
   };
 }
 
+// Parse YYYY-MM-DD as local midnight timestamp (not UTC)
+function dateToTimestamp(dateStr) {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  return new Date(y, m - 1, d).getTime();
+}
+
 // Get available slots for a date range
 async function getAvailableSlots(startDate, endDate) {
-  const start = new Date(startDate).getTime();
-  const end = new Date(endDate).getTime();
+  // endDate should be the day AFTER to include the full end date
+  const start = dateToTimestamp(startDate);
+  const endPlusOne = dateToTimestamp(endDate) + 86400000; // +1 day
 
-  const url = `${GHL_API_BASE}/calendars/${CALENDAR_ID}/free-slots?startDate=${start}&endDate=${end}&timezone=${TIMEZONE}`;
+  const url = `${GHL_API_BASE}/calendars/${CALENDAR_ID}/free-slots?startDate=${start}&endDate=${endPlusOne}&timezone=${TIMEZONE}`;
   const response = await fetch(url, { headers: headers() });
 
   if (!response.ok) {
