@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pkill -f \"node.*src/index.js\")",
+      "Bash(pkill -f \"node --watch\")",
+      "Bash(npm --version)"
+    ]
+  }
+}

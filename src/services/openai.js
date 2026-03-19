@@ -79,15 +79,32 @@ const tools = [
     type: "function",
     function: {
       name: "updateCustomField",
-      description: "Update a custom field on the contact record. Use key 'availed_service' to track which service(s) the customer is interested in.",
+      description: `Update a custom field on the contact record. Available custom field keys:
+- 'availed_service' — service(s) the customer availed or is interested in
+- 'product_interest' — product(s) customer is interested in (e.g. AquaSkin Glutathione, Kaizen C+)
+- 'order_quantity' — quantity and breakdown (e.g. '4 bottles Glutathione + 1 free + 2 Kaizen C+')
+- 'order_total' — total order amount (e.g. '₱6,920')
+- 'payment_method' — payment method chosen (GCash or COD)
+- 'shipping_address' — complete delivery address
+- 'order_status' — order status (pending, paid, shipped, delivered)
+- 'payment_reference' — GCash reference number after payment
+Call this to save order details whenever the customer confirms an order, provides payment info, or gives their address.`,
       parameters: {
         type: "object",
         properties: {
-          key: { type: "string", description: "The custom field key (e.g. 'availed_service', 'booking_notes')" },
+          key: { type: "string", description: "The custom field key (see description for available keys)" },
           value: { type: "string", description: "The value to set" },
         },
         required: ["key", "value"],
       },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "getProductCatalog",
+      description: "Get the full product catalog with pricing, promotions, and payment information. Call this when a customer asks about products, prices, or how to order.",
+      parameters: { type: "object", properties: {} },
     },
   },
   {
@@ -195,6 +212,50 @@ async function executeTool(toolCall, contactId) {
       case "updateCustomField": {
         const result = await updateCustomField(contactId, args.key, args.value);
         return JSON.stringify(result);
+      }
+
+      case "getProductCatalog": {
+        return JSON.stringify({
+          products: [
+            {
+              name: "AquaSkin Premium Glutathione",
+              price: 1455,
+              currency: "PHP",
+              price_display: "₱1,455 per bottle",
+              description: "Japanese FDA-approved supplement trusted by 500+ Cebu clients",
+              benefits: ["Skin brightening/whitening", "Antioxidant defense", "Promotes restful sleep", "Youthful glow"],
+              how_to_use: "1-2 capsules before bedtime",
+              fda_registration: "#4000006996192",
+            },
+            {
+              name: "AquaSkin Kaizen C+ (30 capsules)",
+              price: 550,
+              currency: "PHP",
+              price_display: "₱550 per bottle",
+              description: "First-ever Japan non-acidic Vitamin C in frosted glass bottle with 10-in-1 premium ingredients",
+              unique_features: ["100% Made in Japan", "Non-irritating even on empty stomach", "Japanese desiccant inside bottle", "Classy frosted glass packaging"],
+              benefits: ["High antioxidant & Vitamin C", "Natural anti-inflammatory", "Immune system support", "Helps regulate insulin", "Aids in red-blood-cell formation & anemia prevention", "May reduce cholesterol/blood sugar/risk of heart disease or cancer", "Promotes overall growth & development", "Helps with PCOS"],
+              key_ingredients: ["Rosehips", "Sodium Ascorbate", "Curcumin", "Quercetin", "Beta Glucan", "Zinc Gluconate", "Turmeric", "Vitamin B6", "Vitamin B12", "Inositol"],
+            },
+          ],
+          promotions: [
+            { name: "Buy 4 Get 1 Free", description: "For every 4 bottles of Glutathione purchased, 1 additional bottle is included free", applies_to: "AquaSkin Glutathione" },
+            { name: "Free Shipping (Cebu only)", description: "Orders of 2 or more bottles get free shipping within Cebu" },
+            { name: "Upsell Pairing", description: "Kaizen C+ is positioned as a complement to Glutathione for enhanced whitening and health results" },
+          ],
+          payment: {
+            gcash: { number: "09178092224", account_name: "Lory Mae Ormo", display_name: "LO.Y M.. O." },
+            cod: { available: true, area: "Cebu addresses only" },
+            outside_cebu: "Team confirms courier options and shipping fee separately before providing final total and payment instructions",
+          },
+          pricing_guide: {
+            glutathione_1: "₱1,455",
+            glutathione_2: "₱2,910 (free shipping in Cebu)",
+            glutathione_4: "₱5,820 (+ 1 FREE bottle, free shipping in Cebu)",
+            kaizen_1: "₱550",
+            kaizen_2: "₱1,100 (free shipping in Cebu)",
+          },
+        });
       }
 
       case "getAvailableSlots": {
