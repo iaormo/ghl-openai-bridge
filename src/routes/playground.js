@@ -80,6 +80,26 @@ router.post("/tools", (req, res) => {
   res.json({ success: true, tool });
 });
 
+// PUT /playground/tools/:name — update a tool's description and/or parameters
+router.put("/tools/:name", (req, res) => {
+  const { name } = req.params;
+  const { description, parameters } = req.body;
+  // Find in the OpenAI tools array (covers both built-in and dynamic)
+  const tool = tools.find((t) => t.function.name === name);
+  if (!tool) {
+    return res.status(404).json({ error: `Tool "${name}" not found` });
+  }
+  if (description !== undefined) tool.function.description = description;
+  if (parameters !== undefined) tool.function.parameters = parameters;
+  // Also update in dynamicTools if it's there
+  const dynTool = dynamicTools.find((t) => t.name === name);
+  if (dynTool) {
+    if (description !== undefined) dynTool.description = description;
+    if (parameters !== undefined) dynTool.parameters = parameters;
+  }
+  res.json({ success: true, tool: tool.function });
+});
+
 // DELETE /playground/tools/:name — remove a dynamic tool
 router.delete("/tools/:name", (req, res) => {
   const { name } = req.params;

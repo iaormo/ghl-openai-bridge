@@ -828,6 +828,30 @@
     </div>
   </div>
 
+  <!-- Edit Tool Modal -->
+  <div class="modal-overlay" id="modal-editTool">
+    <div class="modal">
+      <h2>Edit Function Tool</h2>
+      <input type="hidden" id="editToolOriginalName">
+      <div class="field">
+        <label>Tool Name</label>
+        <input type="text" id="editToolName" disabled style="opacity:0.6;">
+      </div>
+      <div class="field">
+        <label>Description</label>
+        <textarea id="editToolDesc" rows="5" placeholder="What this tool does..."></textarea>
+      </div>
+      <div class="field">
+        <label>Parameters (JSON Schema)</label>
+        <textarea id="editToolParams" rows="8" style="font-family:'SF Mono','Fira Code',monospace;font-size:12px;"></textarea>
+      </div>
+      <div class="actions">
+        <button class="btn btn-outline btn-sm" onclick="closeModal('editTool')">Cancel</button>
+        <button class="btn btn-sm btn-green" onclick="saveToolEdits()">Save Changes</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Import Calendars from GHL Modal -->
   <div class="modal-overlay" id="modal-importCalendars">
     <div class="modal">
@@ -1269,13 +1293,13 @@
     function renderTools(tools) {
       const list = document.getElementById('toolList');
       list.innerHTML = tools.map(t => `
-        <div class="card">
+        <div class="card" style="cursor:pointer;transition:border-color 0.15s;" onclick="openToolEditor('${escapeHtml(t.name)}')" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'">
           <div class="card-header">
             <span class="card-title">${escapeHtml(t.name)}</span>
             <span class="badge ${t.builtin ? 'badge-builtin' : 'badge-custom'}">${t.builtin ? 'Built-in' : 'Custom'}</span>
           </div>
-          <div class="card-desc">${escapeHtml(t.description)}</div>
-          ${!t.builtin ? `<button class="btn btn-red btn-sm" style="margin-top:8px" onclick="removeTool('${t.name}')">Remove</button>` : ''}
+          <div class="card-desc">${escapeHtml(t.description.length > 120 ? t.description.slice(0, 120) + '...' : t.description)}</div>
+          ${!t.builtin ? `<button class="btn btn-red btn-sm" style="margin-top:8px" onclick="event.stopPropagation();removeTool('${t.name}')">Remove</button>` : ''}
         </div>
       `).join('');
     }
@@ -1345,6 +1369,48 @@
     }
     function closeModal(name) {
       document.getElementById('modal-' + name).classList.remove('open');
+    }
+
+    // Open tool editor modal
+    function openToolEditor(name) {
+      const tool = allTools.find(t => t.name === name);
+      if (!tool) return;
+      document.getElementById('editToolOriginalName').value = name;
+      document.getElementById('editToolName').value = name;
+      document.getElementById('editToolDesc').value = tool.description || '';
+      document.getElementById('editToolParams').value = tool.parameters
+        ? JSON.stringify(tool.parameters, null, 2)
+        : '{}';
+      openModal('editTool');
+    }
+
+    async function saveToolEdits() {
+      const name = document.getElementById('editToolOriginalName').value;
+      const description = document.getElementById('editToolDesc').value.trim();
+      const paramsStr = document.getElementById('editToolParams').value.trim();
+
+      if (!description) return alert('Description is required.');
+
+      let parameters;
+      try {
+        parameters = paramsStr ? JSON.parse(paramsStr) : undefined;
+      } catch {
+        return alert('Invalid JSON for parameters.');
+      }
+
+      try {
+        const resp = await fetch(`${API}/playground/tools/${name}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ description, parameters }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.error);
+        closeModal('editTool');
+        refreshTools();
+      } catch (err) {
+        alert('Error: ' + err.message);
+      }
     }
 
     // Add tool
