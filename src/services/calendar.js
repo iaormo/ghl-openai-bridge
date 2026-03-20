@@ -194,11 +194,38 @@ async function cancelAppointment(appointmentId) {
   return { success: true, appointmentId };
 }
 
+// Fetch all calendars from the GHL location
+async function getLocationCalendars() {
+  const response = await fetch(
+    `${GHL_API_BASE}/calendars/?locationId=${LOCATION_ID}`,
+    {
+      headers: {
+        Authorization: `Bearer ${process.env.GHL_API_KEY}`,
+        "Content-Type": "application/json",
+        Version: "2021-07-28",
+      },
+    }
+  );
+
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`Failed to fetch calendars: ${err}`);
+  }
+
+  const data = await response.json();
+  return (data.calendars || []).map((c) => ({
+    id: c.id,
+    name: c.name,
+    description: c.description || "",
+  }));
+}
+
 module.exports = {
   getAvailableSlots,
   bookAppointment,
   getContactAppointments,
   rescheduleAppointment,
   cancelAppointment,
+  getLocationCalendars,
   TIMEZONE,
 };

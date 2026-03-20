@@ -24,6 +24,22 @@ function getClient() {
   return openai;
 }
 
+// Allow runtime API key override
+function setApiKey(apiKey) {
+  process.env.OPENAI_API_KEY = apiKey;
+  openai = new OpenAI({ apiKey });
+  console.log("OpenAI API key updated at runtime");
+}
+
+// Allow runtime assistant ID override — re-fetches instructions
+async function setAssistantId(assistantId) {
+  process.env.OPENAI_ASSISTANT_ID = assistantId;
+  systemPrompt = null; // clear cache so it re-fetches
+  const prompt = await getSystemPrompt();
+  console.log("Assistant ID updated to:", assistantId);
+  return prompt;
+}
+
 // Fetch the assistant's instructions once and cache them
 async function getSystemPrompt() {
   if (systemPrompt) return systemPrompt;
@@ -383,4 +399,101 @@ async function chat(contactId, message) {
   return reply;
 }
 
-module.exports = { chat };
+// Playground chat — accepts overrides for temperature, top_p, max_tokens, model
+// Returns { reply, toolCalls } where toolCalls is the full trace
+async function playgroundChat(contactId, message, opts = {}) {
+  const {
+    temperature,
+    top_p,
+    max_tokens = 1000,
+    model,
+    systemPromptOverride,
+    enabledTools,
+  } = opts;
+
+  const [instructions, history] = await Promise.all([
+    getSystemPrompt(),
+    getHistory(contactId, 20),
+  ]);
+
+  const systemContent = (systemPromptOverride || instructions) + getManilaDateContext();
+
+  const messages = [
+    { role: "system", content: systemContent },
+    ...history,
+    { role: "user", content: message },
+  ];
+
+  // Filter tools if enabledTools is specified
+  const activeTools = enabledTools
+    ? tools.filter((t) => enabledTools.includes(t.function.name))
+    : tools;
+
+  const params = {
+    model: model || process.env.OPENAI_MODEL || "gpt-4o-mini",
+    messages,
+    tools: activeTools.length ? activeTools : undefined,
+    max_tokens,
+  };
+  if (temperature !== undefined) params.temperature = temperature;
+  if (top_p !== undefined) params.top_p = top_p;
+
+  let response = await getClient().chat.completions.create(params);
+  let choice = response.choices[0];
+
+  const toolTrace = [];
+  let rounds = 0;
+
+  while (choice.finish_reason === "tool_calls" && rounds < 5) {
+    rounds++;
+    const toolCalls = choice.message.tool_calls;
+    messages.push(choice.message);
+
+    for (const tc of toolCalls) {
+      console.log(`Tool: ${tc.function.name}(${tc.function.arguments})`);
+      const result = await executeTool(tc, contactId);
+      console.log(`Result: ${result.slice(0, 200)}`);
+      toolTrace.push({
+        name: tc.function.name,
+        arguments: JSON.parse(tc.function.arguments || "{}"),
+        result: JSON.parse(result),
+      });
+      messages.push({
+        role: "tool",
+        tool_call_id: tc.id,
+        content: result,
+      });
+    }
+
+    params.messages = messages;
+    response = await getClient().chat.completions.create(params);
+    choice = response.choices[0];
+  }
+
+  const reply = choice.message?.content;
+  if (!reply) throw new Error("No reply from OpenAI");
+
+  await Promise.all([
+    saveMessage(contactId, "user", message),
+    saveMessage(contactId, "assistant", reply),
+  ]);
+
+  return {
+    reply,
+    toolCalls: toolTrace,
+    model: params.model,
+    usage: response.usage,
+  };
+}
+
+module.exports = {
+  chat,
+  playgroundChat,
+  getSystemPrompt,
+  getClient,
+  setApiKey,
+  setAssistantId,
+  tools,
+  executeTool,
+  getManilaDateContext,
+};

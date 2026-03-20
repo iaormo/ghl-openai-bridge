@@ -99,4 +99,44 @@ async function updateCustomField(contactId, key, value) {
   return { success: true, key, value };
 }
 
-module.exports = { getContactInfo, updateContactInfo, updateCustomField };
+// Create a custom field in the GHL location
+async function createLocationCustomField(name, dataType = "TEXT") {
+  const response = await fetch(
+    `${GHL_API_BASE}/locations/${LOCATION_ID}/customFields`,
+    {
+      method: "POST",
+      headers: headers("2021-07-28"),
+      body: JSON.stringify({
+        name,
+        dataType,
+        position: 0,
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`Failed to create custom field in GHL: ${err}`);
+  }
+
+  const data = await response.json();
+  return data.customField || data;
+}
+
+// List all custom fields in the GHL location
+async function getLocationCustomFields() {
+  const response = await fetch(
+    `${GHL_API_BASE}/locations/${LOCATION_ID}/customFields`,
+    { headers: headers("2021-07-28") }
+  );
+
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`Failed to list custom fields: ${err}`);
+  }
+
+  const data = await response.json();
+  return data.customFields || [];
+}
+
+module.exports = { getContactInfo, updateContactInfo, updateCustomField, createLocationCustomField, getLocationCustomFields };

@@ -1,8 +1,10 @@
 require("dotenv").config();
+const path = require("path");
 const express = require("express");
 const cors = require("cors");
 const { initDB } = require("./db");
 const webhookRoutes = require("./routes/webhook");
+const playgroundRoutes = require("./routes/playground");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -10,8 +12,11 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
+// Serve static frontend
+app.use(express.static(path.join(__dirname, "..", "public")));
+
 // Health check
-app.get("/", (req, res) => {
+app.get("/api/health", (req, res) => {
   res.json({
     service: "GHL-OpenAI Bridge",
     status: "running",
@@ -19,8 +24,16 @@ app.get("/", (req, res) => {
   });
 });
 
+// Keep legacy health check
+app.get("/health", (req, res) => {
+  res.json({ service: "GHL-OpenAI Bridge", status: "running" });
+});
+
 // Webhook routes
 app.use("/webhook", webhookRoutes);
+
+// Playground API routes
+app.use("/playground", playgroundRoutes);
 
 // Start server
 async function start() {
