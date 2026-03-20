@@ -9,6 +9,35 @@ function headers(version = "2021-07-28") {
   };
 }
 
+// Cache for location custom field definitions (id → key/name mapping)
+let fieldDefCache = null;
+let fieldDefCacheTime = 0;
+const FIELD_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+async function getFieldDefinitions() {
+  const now = Date.now();
+  if (fieldDefCache && now - fieldDefCacheTime < FIELD_CACHE_TTL) {
+    return fieldDefCache;
+  }
+  try {
+    const fields = await getLocationCustomFields();
+    const map = {};
+    for (const f of fields) {
+      map[f.id] = {
+        key: f.fieldKey || f.name,
+        name: f.name,
+        dataType: f.dataType,
+      };
+    }
+    fieldDefCache = map;
+    fieldDefCacheTime = now;
+    return map;
+  } catch (err) {
+    console.warn("Could not fetch field definitions for resolution:", err.message);
+    return fieldDefCache || {};
+  }
+}
+
 // Get contact information by ID
 async function getContactInfo(contactId) {
   const response = await fetch(
@@ -23,6 +52,20 @@ async function getContactInfo(contactId) {
 
   const data = await response.json();
   const c = data.contact || data;
+
+  // Resolve custom field IDs to readable key names
+  const rawFields = c.customFields || [];
+  const fieldDefs = await getFieldDefinitions();
+  const resolvedFields = rawFields.map((f) => {
+    const def = fieldDefs[f.id];
+    return {
+      id: f.id,
+      key: def ? def.key : f.id,
+      name: def ? def.name : f.id,
+      value: f.value,
+    };
+  });
+
   return {
     id: c.id,
     firstName: c.firstName || c.firstNameRaw || "",
@@ -31,7 +74,7 @@ async function getContactInfo(contactId) {
     email: c.email || "",
     phone: c.phone || "",
     tags: c.tags || [],
-    customFields: c.customFields || [],
+    customFields: resolvedFields,
   };
 }
 
