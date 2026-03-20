@@ -11,6 +11,8 @@ const {
 const {
   createLocationCustomField,
   getLocationCustomFields,
+  getContactInfo,
+  updateContactInfo,
 } = require("../services/contacts");
 const { getLocationCalendars } = require("../services/calendar");
 
@@ -397,6 +399,26 @@ router.get("/assistant", async (req, res) => {
       temperature: assistant.temperature,
       top_p: assistant.top_p,
     });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /playground/contact/:id — fetch a contact from GHL
+router.get("/contact/:id", async (req, res) => {
+  try {
+    const contact = await getContactInfo(req.params.id);
+    res.json(contact);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT /playground/contact/:id — update a contact in GHL
+router.put("/contact/:id", async (req, res) => {
+  try {
+    const result = await updateContactInfo(req.params.id, req.body);
+    res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

@@ -655,7 +655,19 @@
         <h3>Contact</h3>
         <div class="field">
           <label>Contact ID</label>
-          <input type="text" id="contactId" value="playground-test" placeholder="Contact ID for tool calls">
+          <div style="display:flex;gap:6px;">
+            <input type="text" id="contactId" value="playground-test" placeholder="Contact ID for tool calls" style="flex:1;">
+            <button class="btn btn-sm btn-green" onclick="setContact()">Set</button>
+          </div>
+        </div>
+        <div id="contactInfo" style="display:none;margin-top:10px;">
+          <div class="card" style="padding:10px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+              <span style="font-size:13px;font-weight:600;" id="contactDisplayName">—</span>
+              <button class="btn btn-sm btn-outline" onclick="openModal('editContact')">Edit</button>
+            </div>
+            <div style="font-size:11px;color:var(--text-dim);line-height:1.6;" id="contactDetails"></div>
+          </div>
         </div>
       </section>
 
@@ -881,6 +893,36 @@
       <div class="actions">
         <button class="btn btn-outline btn-sm" onclick="closeModal('addField')">Cancel</button>
         <button class="btn btn-sm btn-green" onclick="addField()">Add Field</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Edit Contact Modal -->
+  <div class="modal-overlay" id="modal-editContact">
+    <div class="modal">
+      <h2>Edit Contact</h2>
+      <p style="font-size:12px;color:var(--text-dim);margin-bottom:12px;">
+        Updates the contact directly in GHL.
+      </p>
+      <div class="field">
+        <label>First Name</label>
+        <input type="text" id="editFirstName" placeholder="First name">
+      </div>
+      <div class="field">
+        <label>Last Name</label>
+        <input type="text" id="editLastName" placeholder="Last name">
+      </div>
+      <div class="field">
+        <label>Email</label>
+        <input type="email" id="editEmail" placeholder="email@example.com">
+      </div>
+      <div class="field">
+        <label>Phone</label>
+        <input type="text" id="editPhone" placeholder="+63...">
+      </div>
+      <div class="actions">
+        <button class="btn btn-outline btn-sm" onclick="closeModal('editContact')">Cancel</button>
+        <button class="btn btn-sm btn-green" onclick="saveContactEdits()">Save to GHL</button>
       </div>
     </div>
   </div>
@@ -1537,6 +1579,72 @@
       } catch (err) {
         status.textContent = 'Error: ' + err.message;
         status.style.color = 'var(--red)';
+      }
+    }
+
+    // Set Contact — fetch from GHL and display info
+    let currentContact = null;
+    async function setContact() {
+      const id = document.getElementById('contactId').value.trim();
+      if (!id || id === 'playground-test') {
+        document.getElementById('contactInfo').style.display = 'none';
+        currentContact = null;
+        return;
+      }
+      try {
+        const resp = await fetch(`${API}/playground/contact/${id}`);
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.error);
+        currentContact = data;
+        document.getElementById('contactDisplayName').textContent = data.fullName || data.firstName || 'Unknown';
+        let details = '';
+        if (data.email) details += `Email: ${escapeHtml(data.email)}\n`;
+        if (data.phone) details += `Phone: ${escapeHtml(data.phone)}\n`;
+        if (data.tags && data.tags.length) details += `Tags: ${data.tags.join(', ')}\n`;
+        if (data.customFields && data.customFields.length) {
+          details += `Custom Fields: ${data.customFields.length}`;
+        }
+        document.getElementById('contactDetails').textContent = details || 'No details';
+        document.getElementById('contactInfo').style.display = 'block';
+        // Pre-fill edit modal
+        document.getElementById('editFirstName').value = data.firstName || '';
+        document.getElementById('editLastName').value = data.lastName || '';
+        document.getElementById('editEmail').value = data.email || '';
+        document.getElementById('editPhone').value = data.phone || '';
+        addMessage('system', `Contact loaded: ${data.fullName || data.firstName} (${id})`);
+      } catch (err) {
+        alert('Error loading contact: ' + err.message);
+        document.getElementById('contactInfo').style.display = 'none';
+      }
+    }
+
+    async function saveContactEdits() {
+      const id = document.getElementById('contactId').value.trim();
+      if (!id || id === 'playground-test') return alert('Set a real contact ID first.');
+      const body = {};
+      const fn = document.getElementById('editFirstName').value.trim();
+      const ln = document.getElementById('editLastName').value.trim();
+      const email = document.getElementById('editEmail').value.trim();
+      const phone = document.getElementById('editPhone').value.trim();
+      if (fn) body.firstName = fn;
+      if (ln) body.lastName = ln;
+      if (email) body.email = email;
+      if (phone) body.phone = phone;
+      if (!Object.keys(body).length) return alert('No changes to save.');
+      try {
+        const resp = await fetch(`${API}/playground/contact/${id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.error);
+        closeModal('editContact');
+        addMessage('system', `Contact updated in GHL: ${fn} ${ln}`);
+        // Refresh the contact display
+        await setContact();
+      } catch (err) {
+        alert('Error updating contact: ' + err.message);
       }
     }
 
