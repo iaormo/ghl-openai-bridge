@@ -618,10 +618,30 @@
         <div class="field">
           <label>Model</label>
           <select id="model">
-            <option value="gpt-4o-mini">gpt-4o-mini</option>
-            <option value="gpt-4o">gpt-4o</option>
-            <option value="gpt-4-turbo">gpt-4-turbo</option>
-            <option value="gpt-3.5-turbo">gpt-3.5-turbo</option>
+            <optgroup label="GPT-5 (flagship)">
+              <option value="gpt-5">gpt-5</option>
+              <option value="gpt-5-mini">gpt-5-mini</option>
+              <option value="gpt-5-nano">gpt-5-nano</option>
+            </optgroup>
+            <optgroup label="GPT-4.1">
+              <option value="gpt-4.1">gpt-4.1</option>
+              <option value="gpt-4.1-mini">gpt-4.1-mini</option>
+              <option value="gpt-4.1-nano">gpt-4.1-nano</option>
+            </optgroup>
+            <optgroup label="Reasoning (o-series)">
+              <option value="o3">o3</option>
+              <option value="o3-mini">o3-mini</option>
+              <option value="o1">o1</option>
+              <option value="o1-mini">o1-mini</option>
+            </optgroup>
+            <optgroup label="GPT-4o">
+              <option value="gpt-4o">gpt-4o</option>
+              <option value="gpt-4o-mini" selected>gpt-4o-mini</option>
+            </optgroup>
+            <optgroup label="Legacy">
+              <option value="gpt-4-turbo">gpt-4-turbo</option>
+              <option value="gpt-3.5-turbo">gpt-3.5-turbo</option>
+            </optgroup>
           </select>
         </div>
         <div class="field">
@@ -973,7 +993,7 @@
 
         <h3>Model Settings (Left Sidebar)</h3>
         <ul>
-          <li><strong>Model</strong> — Select the OpenAI model (gpt-4o-mini, gpt-4o, gpt-4-turbo, gpt-3.5-turbo)</li>
+          <li><strong>Model</strong> — Select the OpenAI model (gpt-5 family, gpt-4.1 family, o-series reasoning, gpt-4o, or legacy)</li>
           <li><strong>Temperature</strong> (0–2) — Controls randomness. Lower = more deterministic, higher = more creative. Default: 1.0</li>
           <li><strong>Top P</strong> (0–1) — Nucleus sampling. Lower values restrict to more likely tokens. Default: 1.0</li>
           <li><strong>Max Tokens</strong> (100–4000) — Maximum length of the assistant's response</li>
@@ -1092,15 +1112,35 @@
     let defaultPrompt = '';
     let allTools = [];
 
+    // Auth-aware fetch wrapper — attaches Bearer token, kicks back to login on 401
+    function getToken() { return sessionStorage.getItem('bella_token') || ''; }
+    function clearAuthAndShowLogin() {
+      sessionStorage.removeItem('bella_token');
+      document.getElementById('mainApp').style.display = 'none';
+      const gate = document.getElementById('loginGate');
+      gate.classList.remove('hidden');
+    }
+    async function apiFetch(url, opts = {}) {
+      const headers = new Headers(opts.headers || {});
+      const token = getToken();
+      if (token) headers.set('Authorization', `Bearer ${token}`);
+      const resp = await fetch(url, { ...opts, headers });
+      if (resp.status === 401) {
+        clearAuthAndShowLogin();
+        throw new Error('Unauthorized');
+      }
+      return resp;
+    }
+
     // Init
     async function init() {
       try {
         const [config, tools, calendars, fields, assistant] = await Promise.all([
-          fetch(`${API}/playground/config`).then(r => r.json()),
-          fetch(`${API}/playground/tools`).then(r => r.json()),
-          fetch(`${API}/playground/calendars`).then(r => r.json()),
-          fetch(`${API}/playground/custom-fields`).then(r => r.json()),
-          fetch(`${API}/playground/assistant`).then(r => r.ok ? r.json() : null).catch(() => null),
+          apiFetch(`${API}/playground/config`).then(r => r.json()),
+          apiFetch(`${API}/playground/tools`).then(r => r.json()),
+          apiFetch(`${API}/playground/calendars`).then(r => r.json()),
+          apiFetch(`${API}/playground/custom-fields`).then(r => r.json()),
+          apiFetch(`${API}/playground/assistant`).then(r => r.ok ? r.json() : null).catch(() => null),
         ]);
 
         defaultPrompt = config.systemPrompt || '';
@@ -1195,7 +1235,7 @@
       const useOverride = promptOverride !== defaultPrompt ? promptOverride : undefined;
 
       try {
-        const resp = await fetch(`${API}/playground/chat`, {
+        const resp = await apiFetch(`${API}/playground/chat`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1399,7 +1439,7 @@
       }
 
       try {
-        const resp = await fetch(`${API}/playground/tools/${name}`, {
+        const resp = await apiFetch(`${API}/playground/tools/${name}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ description, parameters }),
@@ -1429,7 +1469,7 @@
       }
 
       try {
-        const resp = await fetch(`${API}/playground/tools`, {
+        const resp = await apiFetch(`${API}/playground/tools`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name, description, parameters }),
@@ -1450,7 +1490,7 @@
     async function removeTool(name) {
       if (!confirm(`Remove tool "${name}"?`)) return;
       try {
-        await fetch(`${API}/playground/tools/${name}`, { method: 'DELETE' });
+        await apiFetch(`${API}/playground/tools/${name}`, { method: 'DELETE' });
         refreshTools();
       } catch (err) {
         alert('Error: ' + err.message);
@@ -1458,7 +1498,7 @@
     }
 
     async function refreshTools() {
-      const tools = await fetch(`${API}/playground/tools`).then(r => r.json());
+      const tools = await apiFetch(`${API}/playground/tools`).then(r => r.json());
       allTools = tools;
       renderTools(tools);
       renderToolToggles(tools);
@@ -1470,7 +1510,7 @@
       container.innerHTML = '<div style="color:var(--text-dim);font-size:13px;">Loading calendars from GHL...</div>';
       openModal('importCalendars');
       try {
-        const resp = await fetch(`${API}/playground/calendars/ghl`);
+        const resp = await apiFetch(`${API}/playground/calendars/ghl`);
         const data = await resp.json();
         if (!resp.ok) throw new Error(data.error);
         if (!data.length) {
@@ -1501,7 +1541,7 @@
         description: cb.dataset.desc || '',
       }));
       try {
-        const resp = await fetch(`${API}/playground/calendars/sync`, {
+        const resp = await apiFetch(`${API}/playground/calendars/sync`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ calendars }),
@@ -1521,7 +1561,7 @@
       container.innerHTML = '<div style="color:var(--text-dim);font-size:13px;">Loading fields from GHL...</div>';
       openModal('importFields');
       try {
-        const resp = await fetch(`${API}/playground/custom-fields/ghl`);
+        const resp = await apiFetch(`${API}/playground/custom-fields/ghl`);
         const data = await resp.json();
         if (!resp.ok) throw new Error(data.error);
         if (!data.length) {
@@ -1553,7 +1593,7 @@
         dataType: cb.dataset.type || 'TEXT',
       }));
       try {
-        const resp = await fetch(`${API}/playground/custom-fields/sync`, {
+        const resp = await apiFetch(`${API}/playground/custom-fields/sync`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ fields }),
@@ -1570,10 +1610,10 @@
     // Remove calendar
     async function removeCalendar(id) {
       try {
-        const resp = await fetch(`${API}/playground/calendars/${encodeURIComponent(id)}`, { method: 'DELETE' });
+        const resp = await apiFetch(`${API}/playground/calendars/${encodeURIComponent(id)}`, { method: 'DELETE' });
         const data = await resp.json();
         if (!resp.ok) throw new Error(data.error);
-        const calendars = await fetch(`${API}/playground/calendars`).then(r => r.json());
+        const calendars = await apiFetch(`${API}/playground/calendars`).then(r => r.json());
         renderCalendars(calendars);
       } catch (err) {
         alert('Error: ' + err.message);
@@ -1583,10 +1623,10 @@
     // Remove field
     async function removeField(key) {
       try {
-        const resp = await fetch(`${API}/playground/custom-fields/${encodeURIComponent(key)}`, { method: 'DELETE' });
+        const resp = await apiFetch(`${API}/playground/custom-fields/${encodeURIComponent(key)}`, { method: 'DELETE' });
         const data = await resp.json();
         if (!resp.ok) throw new Error(data.error);
-        const fields = await fetch(`${API}/playground/custom-fields`).then(r => r.json());
+        const fields = await apiFetch(`${API}/playground/custom-fields`).then(r => r.json());
         renderFields(fields);
       } catch (err) {
         alert('Error: ' + err.message);
@@ -1601,7 +1641,7 @@
       if (!key || !description) return alert('Name and description are required.');
 
       try {
-        const resp = await fetch(`${API}/playground/custom-fields`, {
+        const resp = await apiFetch(`${API}/playground/custom-fields`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ key, description, dataType }),
@@ -1613,7 +1653,7 @@
         document.getElementById('newFieldKey').value = '';
         document.getElementById('newFieldDesc').value = '';
         document.getElementById('newFieldType').value = 'TEXT';
-        const fields = await fetch(`${API}/playground/custom-fields`).then(r => r.json());
+        const fields = await apiFetch(`${API}/playground/custom-fields`).then(r => r.json());
         renderFields(fields);
       } catch (err) {
         alert('Error: ' + err.message);
@@ -1632,7 +1672,7 @@
       status.textContent = 'Saving...';
       status.style.color = 'var(--orange)';
       try {
-        const resp = await fetch(`${API}/playground/settings/prompt`, {
+        const resp = await apiFetch(`${API}/playground/settings/prompt`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ instructions: prompt }),
@@ -1658,7 +1698,7 @@
         return;
       }
       try {
-        const resp = await fetch(`${API}/playground/contact/${id}`);
+        const resp = await apiFetch(`${API}/playground/contact/${id}`);
         const data = await resp.json();
         if (!resp.ok) throw new Error(data.error);
         currentContact = data;
@@ -1698,7 +1738,7 @@
       if (phone) body.phone = phone;
       if (!Object.keys(body).length) return alert('No changes to save.');
       try {
-        const resp = await fetch(`${API}/playground/contact/${id}`, {
+        const resp = await apiFetch(`${API}/playground/contact/${id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
@@ -1722,7 +1762,7 @@
       status.textContent = 'Saving...';
       status.style.color = 'var(--orange)';
       try {
-        const resp = await fetch(`${API}/playground/settings/api-key`, {
+        const resp = await apiFetch(`${API}/playground/settings/api-key`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ apiKey: key }),
@@ -1750,7 +1790,7 @@
       status.textContent = 'Saving...';
       status.style.color = 'var(--orange)';
       try {
-        const resp = await fetch(`${API}/playground/settings/ghl-key`, {
+        const resp = await apiFetch(`${API}/playground/settings/ghl-key`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ apiKey: key }),
@@ -1778,7 +1818,7 @@
       status.textContent = 'Saving...';
       status.style.color = 'var(--orange)';
       try {
-        const resp = await fetch(`${API}/playground/settings/ghl-location`, {
+        const resp = await apiFetch(`${API}/playground/settings/ghl-location`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ locationId: id }),
@@ -1799,7 +1839,7 @@
       status.textContent = 'Saving...';
       status.style.color = 'var(--orange)';
       try {
-        const resp = await fetch(`${API}/playground/settings/model`, {
+        const resp = await apiFetch(`${API}/playground/settings/model`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1826,7 +1866,7 @@
       status.textContent = 'Saving...';
       status.style.color = 'var(--orange)';
       try {
-        const resp = await fetch(`${API}/playground/settings/assistant-id`, {
+        const resp = await apiFetch(`${API}/playground/settings/assistant-id`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ assistantId: id }),
@@ -1899,25 +1939,36 @@
       window._matrixInterval = matrixInterval;
     })();
 
-    function attemptLogin() {
-      const pw = document.getElementById('loginPassword').value;
-      if (pw === 'Iambellafrombreys') {
-        // Success
-        document.getElementById('loginGate').classList.add('hidden');
-        document.getElementById('mainApp').style.display = '';
-        if (window._matrixInterval) clearInterval(window._matrixInterval);
-        sessionStorage.setItem('bella_auth', '1');
-        init();
-      } else {
-        const box = document.getElementById('loginBox');
-        const err = document.getElementById('loginError');
-        err.textContent = 'Wrong password. Try again.';
-        box.classList.remove('shake');
-        void box.offsetWidth; // trigger reflow
-        box.classList.add('shake');
-        document.getElementById('loginPassword').value = '';
-        document.getElementById('loginPassword').focus();
+    async function attemptLogin() {
+      const pwInput = document.getElementById('loginPassword');
+      const pw = pwInput.value;
+      const box = document.getElementById('loginBox');
+      const err = document.getElementById('loginError');
+      err.textContent = '';
+      try {
+        const resp = await fetch(`${API}/playground/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: pw }),
+        });
+        if (resp.ok) {
+          const { token } = await resp.json();
+          sessionStorage.setItem('bella_token', token);
+          document.getElementById('loginGate').classList.add('hidden');
+          document.getElementById('mainApp').style.display = '';
+          if (window._matrixInterval) clearInterval(window._matrixInterval);
+          init();
+          return;
+        }
+        err.textContent = resp.status === 401 ? 'Wrong password. Try again.' : 'Login failed. Try again.';
+      } catch (e) {
+        err.textContent = 'Network error. Try again.';
       }
+      box.classList.remove('shake');
+      void box.offsetWidth; // trigger reflow
+      box.classList.add('shake');
+      pwInput.value = '';
+      pwInput.focus();
     }
 
     // Enter key on password field
@@ -1925,8 +1976,8 @@
       if (e.key === 'Enter') attemptLogin();
     });
 
-    // Check if already authenticated this session
-    if (sessionStorage.getItem('bella_auth') === '1') {
+    // Restore session if a token is present (will be validated on first API call)
+    if (sessionStorage.getItem('bella_token')) {
       document.getElementById('loginGate').classList.add('hidden');
       document.getElementById('mainApp').style.display = '';
       if (window._matrixInterval) clearInterval(window._matrixInterval);

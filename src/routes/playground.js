@@ -15,8 +15,15 @@ const {
   updateContactInfo,
 } = require("../services/contacts");
 const { getLocationCalendars } = require("../services/calendar");
+const { loginHandler, requireAuth } = require("../middleware/auth");
 
 const router = express.Router();
+
+// Public: login endpoint
+router.post("/login", loginHandler);
+
+// All other /playground routes require a valid token
+router.use(requireAuth);
 
 // Runtime-added tools and custom fields (in-memory, persists for server lifetime)
 const dynamicTools = [];
