@@ -48,10 +48,16 @@ router.post("/inbound", async (req, res) => {
     const locationId = body.location?.id || body.locationId || body.location_id;
 
     if (!contactId || !message) {
-      return res.status(400).json({
-        error: "Missing contactId or message",
+      // Respond 200 (not 400) so GHL's "Test" button and non-message events don't show as
+      // failed and GHL doesn't auto-disable the webhook. Real messages still process below.
+      console.warn(
+        `Inbound webhook ignored — no contactId/message (likely a GHL test or non-message event). contactId=${contactId} hasMessage=${!!message}`
+      );
+      return res.status(200).json({
+        skipped: true,
+        reason: "no contactId or message in payload (ignored)",
         received: { contactId, message },
-        hint: "Webhook payload must include contactId and message fields",
+        hint: "For real messages, ensure the payload includes contact_id and message.body",
       });
     }
 
