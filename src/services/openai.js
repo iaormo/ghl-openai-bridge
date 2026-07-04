@@ -49,7 +49,7 @@ const tools = [
     type: "function",
     function: {
       name: "getCurrentDate",
-      description: "Get the current date and time in Manila timezone (UTC+8). Call this at the start of a conversation.",
+      description: "Get the current date and time in Philippine time (UTC+8). Call this at the start of a conversation.",
       parameters: { type: "object", properties: {} },
     },
   },
@@ -276,7 +276,7 @@ function getManilaDateContext() {
       `${d.toLocaleDateString("en-PH", { weekday: "long", timeZone: TIMEZONE })} = ${d.toLocaleDateString("en-PH", { year: "numeric", month: "2-digit", day: "2-digit", timeZone: TIMEZONE })}`
     );
   }
-  return `\n\nCURRENT DATE/TIME (Manila, UTC+8): ${dateStr}, ${timeStr}\nUpcoming days:\n${days.join("\n")}`;
+  return `\n\nCURRENT DATE/TIME (Dumaguete, Philippines — Philippine Time, UTC+8): ${dateStr}, ${timeStr}\nUpcoming days:\n${days.join("\n")}`;
 }
 
 // Build the system instructions: brain.md (persona + knowledge + playbooks) + fresh date context.
