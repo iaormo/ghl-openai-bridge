@@ -1,6 +1,6 @@
 const GHL_API_BASE = "https://services.leadconnectorhq.com";
-const CALENDAR_ID = process.env.GHL_CALENDAR_ID || "6ZLEA0dTsCE67OOAmQnU";
-const LOCATION_ID = process.env.GHL_LOCATION_ID || "JYNTUGxvUZVoROmjpf50";
+const CALENDAR_ID = process.env.GHL_CALENDAR_ID || "hpj5HNU9F20BClTjiVTY";
+const LOCATION_ID = process.env.GHL_LOCATION_ID || "GfDBeSbJmjBtcqGK6vXN";
 const TIMEZONE = process.env.GHL_TIMEZONE || "Asia/Manila";
 
 function headers() {

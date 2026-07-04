@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Bella's Playground</title>
+  <title>Skye's Playground</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     :root {
@@ -584,22 +584,10 @@
   </style>
 </head>
 <body>
-  <!-- Login Gate -->
-  <div class="login-gate" id="loginGate">
-    <canvas id="matrixCanvas"></canvas>
-    <div class="login-box" id="loginBox">
-      <h1><span>Bella's</span> Playground</h1>
-      <div class="subtitle">Enter password to continue</div>
-      <input type="password" id="loginPassword" placeholder="Password" autofocus>
-      <button onclick="attemptLogin()">Enter</button>
-      <div class="login-error" id="loginError"></div>
-    </div>
-  </div>
-
-  <div class="app" id="mainApp" style="display:none;">
+  <div class="app" id="mainApp">
     <!-- Header -->
     <div class="header">
-      <h1><span>Bella's</span> Playground</h1>
+      <h1><span>Skye's</span> Playground</h1>
       <div class="status" id="statusIndicator">Connected</div>
       <div class="tab-bar">
         <button class="tab active" data-panel="tools">Tools</button>
@@ -666,7 +654,7 @@
           </div>
         </div>
         <div style="display:flex;gap:8px;align-items:center;margin-top:8px;">
-          <button class="btn btn-sm btn-green" onclick="saveModelSettings()">Save to Assistant</button>
+          <button class="btn btn-sm btn-green" onclick="saveModelSettings()">Save Model</button>
           <span id="modelSettingsStatus" style="font-size:11px;color:var(--text-dim);"></span>
         </div>
       </section>
@@ -782,7 +770,7 @@
         <div class="card">
           <div class="card-title" style="margin-bottom:8px;">GHL Location ID</div>
           <div class="field">
-            <input type="text" id="ghlLocationInput" placeholder="e.g. JYNTUGxvUZVoROmjpf50" style="font-family:'SF Mono',monospace;font-size:12px;">
+            <input type="text" id="ghlLocationInput" placeholder="e.g. GfDBeSbJmjBtcqGK6vXN" style="font-family:'SF Mono',monospace;font-size:12px;">
           </div>
           <div style="display:flex;gap:8px;align-items:center;">
             <button class="btn btn-sm btn-green" onclick="saveGhlLocation()">Save</button>
@@ -792,33 +780,20 @@
             Your GHL sub-account Location ID. Found in Settings > Business Profile.
           </div>
         </div>
-        <div class="card">
-          <div class="card-title" style="margin-bottom:8px;">Assistant ID</div>
-          <div class="field">
-            <input type="text" id="assistantIdInput" placeholder="asst_..." style="font-family:'SF Mono',monospace;font-size:12px;">
-          </div>
-          <div style="display:flex;gap:8px;align-items:center;">
-            <button class="btn btn-sm btn-green" onclick="saveAssistantId()">Save</button>
-            <span id="assistantIdStatus" style="font-size:11px;color:var(--text-dim);"></span>
-          </div>
-          <div style="margin-top:8px;font-size:11px;color:var(--text-dim);">
-            Change the OpenAI Assistant to pull instructions from. Reloads the system prompt.
-          </div>
-        </div>
       </div>
 
       <!-- Prompt panel -->
       <div class="panel-section" id="panel-prompt">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-          <h3 style="font-size:14px;font-weight:600;">System Prompt</h3>
+          <h3 style="font-size:14px;font-weight:600;">System Prompt (brain.md)</h3>
           <div style="display:flex;gap:8px;">
-            <button class="btn btn-sm btn-green" onclick="savePrompt()">Save Prompt</button>
-            <button class="btn btn-sm" onclick="resetPrompt()">Reset to Default</button>
+            <button class="btn btn-sm btn-green" onclick="savePrompt()">Save to brain.md</button>
+            <button class="btn btn-sm" onclick="resetPrompt()">Reset</button>
           </div>
         </div>
-        <textarea class="prompt-editor" id="promptEditor" placeholder="Loading system prompt..."></textarea>
+        <textarea class="prompt-editor" id="promptEditor" placeholder="Loading brain.md..."></textarea>
         <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;">
-          <span style="font-size:11px;color:var(--text-dim);">Edit the system prompt above. Save to persist to the assistant, or it applies locally to the next message.</span>
+          <span style="font-size:11px;color:var(--text-dim);">This is <code>brain.md</code> — Skye's full brain (persona + knowledge + playbooks). Save writes the file and hot-reloads it. On Railway (ephemeral filesystem), commit brain.md to git for permanent changes.</span>
           <span id="promptStatus" style="font-size:11px;color:var(--text-dim);"></span>
         </div>
       </div>
@@ -975,19 +950,19 @@
   <div class="modal-overlay" id="modal-help">
     <div class="modal modal-wide" style="max-height:85vh;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
-        <h2 style="margin:0;">Bella's Playground — Documentation</h2>
+        <h2 style="margin:0;">Skye's Playground — Documentation</h2>
         <button class="btn btn-outline btn-sm" onclick="closeModal('help')">Close</button>
       </div>
       <div class="docs">
 
         <h3>Overview</h3>
-        <p>Bella's Playground lets you test and configure your OpenAI-powered GHL assistant in real time. You can chat with the bot, tweak model parameters, manage function tools, add calendars, define custom fields, and edit the system prompt — all from one interface.</p>
+        <p>Skye's Playground lets you test and configure your OpenAI-powered GHL bot in real time. You can chat with the bot, tweak model parameters, manage function tools, add calendars, define custom fields, and edit the system prompt — all from one interface. The bot runs on the OpenAI <strong>Responses API</strong>, and its full brain (persona + knowledge + playbooks) lives in <code>brain.md</code>, injected into every request.</p>
 
         <h3>Getting Started</h3>
         <ul>
           <li>Go to <strong>Settings</strong> tab and enter your <code>OpenAI API Key</code> (starts with <code>sk-</code>)</li>
-          <li>Enter your <code>Assistant ID</code> (starts with <code>asst_</code>) — this is found in your OpenAI dashboard under Assistants</li>
-          <li>Click <strong>Save</strong> on each — the system prompt will auto-load from your assistant</li>
+          <li>Pick a <strong>Model</strong> in the left sidebar and click <strong>Save Model</strong></li>
+          <li>Edit the bot's brain in the <strong>Prompt</strong> tab (this is <code>brain.md</code>)</li>
           <li>Start chatting in the center panel to test your bot</li>
         </ul>
 
@@ -1001,18 +976,17 @@
         </ul>
         <div class="tip">Tip: For consistent customer service responses, use Temperature 0.3–0.7. For creative/varied responses, use 0.8–1.2.</div>
 
-        <h3>System Prompt (Prompt Tab)</h3>
-        <p>The system prompt defines your assistant's personality, rules, and behavior. It is loaded from your OpenAI Assistant's instructions on startup.</p>
+        <h3>System Prompt / Brain (Prompt Tab)</h3>
+        <p>The Prompt tab edits <code>brain.md</code> — Skye's full brain: persona, rules, ScalePlus knowledge (services, pricing, FAQs, testimonials), and the lead-qualification + appointment-setting playbooks. It's injected into every request as the system instructions.</p>
         <ul>
-          <li><strong>Edit</strong> the prompt directly in the text area</li>
-          <li><strong>Save Prompt</strong> — Persists changes back to the OpenAI Assistant (permanent)</li>
-          <li><strong>Reset to Default</strong> — Reverts to the last saved version</li>
-          <li>If you edit without saving, changes only apply locally to the current session</li>
+          <li><strong>Edit</strong> the brain directly in the text area</li>
+          <li><strong>Save to brain.md</strong> — Writes the file and hot-reloads it immediately</li>
+          <li><strong>Reset</strong> — Reverts the editor to the last loaded version</li>
         </ul>
-        <div class="tip">Tip: Reference tool names in your prompt to guide when the AI calls them. Example: "When a customer asks about prices, call getProductCatalog before responding."</div>
+        <div class="tip">Tip: On Railway the filesystem is ephemeral, so a Save survives until the next redeploy. For permanent changes, edit <code>brain.md</code> in git and push. View the live brain any time at <code>GET /playground/brain</code>.</div>
 
         <h3>How Tools Work</h3>
-        <p>Function tools let the AI perform actions — check calendars, update contacts, look up products, etc. When the AI decides it needs information or needs to take an action, it "calls" a tool and uses the result in its response.</p>
+        <p>Function tools let the AI perform actions — check calendars, update contacts, save lead-qualification fields, etc. When the AI decides it needs information or needs to take an action, it "calls" a tool and uses the result in its response.</p>
         <p>The AI decides which tool to call based on:</p>
         <ul>
           <li>The <strong>tool name</strong> — should be descriptive (e.g. <code>getAvailableSlots</code>)</li>
@@ -1027,10 +1001,9 @@
           <li><code>getCurrentDate</code> — Returns current Manila date/time</li>
           <li><code>getContactInformation</code> — Fetches customer info from GHL</li>
           <li><code>updateContactInfo</code> — Updates customer name, phone, or email in GHL</li>
-          <li><code>updateCustomField</code> — Sets custom field values on the contact (orders, preferences, etc.)</li>
-          <li><code>getProductCatalog</code> — Returns full product list with pricing and promos</li>
-          <li><code>getAvailableSlots</code> — Checks open appointment times for a date</li>
-          <li><code>appointmentBooking</code> — Books an appointment for the customer</li>
+          <li><code>updateCustomField</code> — Sets lead-qualification fields on the contact (business, industry, pain points, etc.)</li>
+          <li><code>getAvailableSlots</code> — Checks open times for the free audit call on a date</li>
+          <li><code>appointmentBooking</code> — Books the free automation audit call for the lead</li>
           <li><code>getContactAppointments</code> — Lists upcoming appointments</li>
           <li><code>rescheduleAppointment</code> — Moves an appointment to a new time</li>
           <li><code>cancelAppointment</code> — Cancels an existing appointment</li>
@@ -1072,7 +1045,7 @@
         </ul>
 
         <h3>Custom Fields</h3>
-        <p>The <strong>Custom Fields</strong> tab manages which fields the <code>updateCustomField</code> tool can write to. Built-in fields (order details, payment, etc.) are pre-configured. Adding a new field here:</p>
+        <p>The <strong>Custom Fields</strong> tab manages which fields the <code>updateCustomField</code> tool can write to. Built-in fields (business_name, industry, pain_points, service_interest, lead_status, etc.) are pre-configured. Adding a new field here:</p>
         <ul>
           <li>Updates the <code>updateCustomField</code> tool description so the AI knows about it</li>
           <li>The field key must also exist in your GHL location (Settings &gt; Custom Fields)</li>
@@ -1082,17 +1055,17 @@
         <h3>Referencing Tools in Your Prompt</h3>
         <p>To get the best results from tool calling, explicitly guide the AI in your system prompt:</p>
 <pre>RULES:
-- When a customer asks about products or prices,
-  ALWAYS call getProductCatalog first.
-- When the customer provides their name or phone,
+- Answer questions about ScalePlus using the
+  knowledge in brain.md. Never invent prices —
+  steer toward booking the free automation audit.
+- When the lead provides their name or phone,
   IMMEDIATELY call updateContactInfo.
-- When the customer confirms an order, call
-  updateCustomField for each order detail
-  (product_interest, order_quantity, order_total,
-  payment_method, shipping_address).
-- Before suggesting appointment times, call
-  getAvailableSlots for the requested date.
-- Never make up prices — always use getProductCatalog.</pre>
+- As the lead shares qualification info, call
+  updateCustomField for each detail (business_name,
+  industry, team_size, current_tools, pain_points,
+  service_interest, lead_status).
+- Before suggesting audit-call times, call
+  getAvailableSlots for the requested date.</pre>
 
         <h3>Chat &amp; Testing</h3>
         <ul>
@@ -1112,68 +1085,40 @@
     let defaultPrompt = '';
     let allTools = [];
 
-    // Auth-aware fetch wrapper — attaches Bearer token, kicks back to login on 401
-    function getToken() { return sessionStorage.getItem('bella_token') || ''; }
-    function clearAuthAndShowLogin() {
-      sessionStorage.removeItem('bella_token');
-      document.getElementById('mainApp').style.display = 'none';
-      const gate = document.getElementById('loginGate');
-      gate.classList.remove('hidden');
-    }
+    // Plain fetch wrapper (no auth — the playground is open).
     async function apiFetch(url, opts = {}) {
-      const headers = new Headers(opts.headers || {});
-      const token = getToken();
-      if (token) headers.set('Authorization', `Bearer ${token}`);
-      const resp = await fetch(url, { ...opts, headers });
-      if (resp.status === 401) {
-        clearAuthAndShowLogin();
-        throw new Error('Unauthorized');
-      }
-      return resp;
+      return fetch(url, opts);
     }
 
     // Init
     async function init() {
       try {
-        const [config, tools, calendars, fields, assistant] = await Promise.all([
+        const [config, tools, calendars, fields] = await Promise.all([
           apiFetch(`${API}/playground/config`).then(r => r.json()),
           apiFetch(`${API}/playground/tools`).then(r => r.json()),
           apiFetch(`${API}/playground/calendars`).then(r => r.json()),
           apiFetch(`${API}/playground/custom-fields`).then(r => r.json()),
-          apiFetch(`${API}/playground/assistant`).then(r => r.ok ? r.json() : null).catch(() => null),
         ]);
 
         defaultPrompt = config.systemPrompt || '';
         document.getElementById('promptEditor').value = defaultPrompt;
-
-        // Load model settings from assistant if available
-        if (assistant) {
-          document.getElementById('model').value = assistant.model || config.model;
-          if (assistant.temperature !== undefined && assistant.temperature !== null) {
-            document.getElementById('temperature').value = assistant.temperature;
-            document.getElementById('tempVal').textContent = parseFloat(assistant.temperature).toFixed(2);
-          }
-          if (assistant.top_p !== undefined && assistant.top_p !== null) {
-            document.getElementById('topP').value = assistant.top_p;
-            document.getElementById('topPVal').textContent = parseFloat(assistant.top_p).toFixed(2);
-          }
-        } else {
-          document.getElementById('model').value = config.model;
-        }
+        document.getElementById('model').value = config.model;
 
         allTools = tools;
         renderTools(tools);
         renderToolToggles(tools);
         renderCalendars(calendars);
         renderFields(fields);
-        // Load assistant ID into settings
-        if (config.assistantId) {
-          document.getElementById('assistantIdInput').value = config.assistantId;
+        // Pre-fill all keys/settings from the server config (sourced from env vars).
+        if (config.openaiKey) {
+          document.getElementById('openaiKeyInput').value = config.openaiKey;
         }
-        // Show masked key status if key exists
         if (config.hasApiKey) {
           document.getElementById('keyStatus').textContent = 'Key is set';
           document.getElementById('keyStatus').style.color = 'var(--green)';
+        }
+        if (config.ghlKey) {
+          document.getElementById('ghlKeyInput').value = config.ghlKey;
         }
         if (config.hasGhlKey) {
           document.getElementById('ghlKeyStatus').textContent = 'Key is set';
@@ -1667,20 +1612,20 @@
     }
 
     async function savePrompt() {
-      const prompt = document.getElementById('promptEditor').value;
+      const content = document.getElementById('promptEditor').value;
       const status = document.getElementById('promptStatus');
       status.textContent = 'Saving...';
       status.style.color = 'var(--orange)';
       try {
-        const resp = await apiFetch(`${API}/playground/settings/prompt`, {
+        const resp = await apiFetch(`${API}/playground/brain`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ instructions: prompt }),
+          body: JSON.stringify({ content }),
         });
         const data = await resp.json();
         if (!resp.ok) throw new Error(data.error);
-        defaultPrompt = prompt;
-        status.textContent = 'Saved to assistant!';
+        defaultPrompt = content;
+        status.textContent = 'Saved to brain.md!';
         status.style.color = 'var(--green)';
       } catch (err) {
         status.textContent = 'Error: ' + err.message;
@@ -1833,7 +1778,7 @@
       }
     }
 
-    // Save model settings to OpenAI assistant
+    // Save the default model (runtime). Temperature/top_p apply per-request from the chat panel.
     async function saveModelSettings() {
       const status = document.getElementById('modelSettingsStatus');
       status.textContent = 'Saving...';
@@ -1842,42 +1787,12 @@
         const resp = await apiFetch(`${API}/playground/settings/model`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            model: document.getElementById('model').value,
-            temperature: parseFloat(document.getElementById('temperature').value),
-            top_p: parseFloat(document.getElementById('topP').value),
-          }),
+          body: JSON.stringify({ model: document.getElementById('model').value }),
         });
         const data = await resp.json();
         if (!resp.ok) throw new Error(data.error);
-        status.textContent = 'Saved to assistant!';
+        status.textContent = 'Saved!';
         status.style.color = 'var(--green)';
-      } catch (err) {
-        status.textContent = 'Error: ' + err.message;
-        status.style.color = 'var(--red)';
-      }
-    }
-
-    // Settings: Save Assistant ID
-    async function saveAssistantId() {
-      const id = document.getElementById('assistantIdInput').value.trim();
-      if (!id) return alert('Please enter an Assistant ID.');
-      const status = document.getElementById('assistantIdStatus');
-      status.textContent = 'Saving...';
-      status.style.color = 'var(--orange)';
-      try {
-        const resp = await apiFetch(`${API}/playground/settings/assistant-id`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ assistantId: id }),
-        });
-        const data = await resp.json();
-        if (!resp.ok) throw new Error(data.error);
-        status.textContent = 'Saved! Prompt reloaded.';
-        status.style.color = 'var(--green)';
-        // Reload the prompt
-        defaultPrompt = data.systemPrompt || defaultPrompt;
-        document.getElementById('promptEditor').value = defaultPrompt;
       } catch (err) {
         status.textContent = 'Error: ' + err.message;
         status.style.color = 'var(--red)';
@@ -1891,98 +1806,8 @@
       });
     });
 
-    // ========== LOGIN GATE ==========
-    const LOGIN_HASH = '5f4dcc3b5aa765d61d8327deb882cf99'; // not used, client-side check only
-
-    // Matrix rain
-    (function initMatrix() {
-      const canvas = document.getElementById('matrixCanvas');
-      if (!canvas) return;
-      const ctx = canvas.getContext('2d');
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-
-      const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789@#$%^&*()_+-=[]{}|;:<>?/~BellaBreys';
-      const fontSize = 14;
-      const columns = Math.floor(canvas.width / fontSize);
-      const drops = Array(columns).fill(1);
-
-      function draw() {
-        ctx.fillStyle = 'rgba(10, 10, 15, 0.06)';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.font = fontSize + 'px monospace';
-
-        for (let i = 0; i < drops.length; i++) {
-          const char = chars[Math.floor(Math.random() * chars.length)];
-          // Purple gradient colors
-          const purples = ['#6c5ce7', '#a855f7', '#7f6ef0', '#9b59b6', '#8e44ad', '#5b2c8e'];
-          ctx.fillStyle = purples[Math.floor(Math.random() * purples.length)];
-          ctx.globalAlpha = 0.3 + Math.random() * 0.5;
-          ctx.fillText(char, i * fontSize, drops[i] * fontSize);
-          ctx.globalAlpha = 1;
-
-          if (drops[i] * fontSize > canvas.height && Math.random() > 0.975) {
-            drops[i] = 0;
-          }
-          drops[i]++;
-        }
-      }
-
-      const matrixInterval = setInterval(draw, 40);
-
-      window.addEventListener('resize', () => {
-        canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight;
-      });
-
-      // Store interval so we can stop it after login
-      window._matrixInterval = matrixInterval;
-    })();
-
-    async function attemptLogin() {
-      const pwInput = document.getElementById('loginPassword');
-      const pw = pwInput.value;
-      const box = document.getElementById('loginBox');
-      const err = document.getElementById('loginError');
-      err.textContent = '';
-      try {
-        const resp = await fetch(`${API}/playground/login`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ password: pw }),
-        });
-        if (resp.ok) {
-          const { token } = await resp.json();
-          sessionStorage.setItem('bella_token', token);
-          document.getElementById('loginGate').classList.add('hidden');
-          document.getElementById('mainApp').style.display = '';
-          if (window._matrixInterval) clearInterval(window._matrixInterval);
-          init();
-          return;
-        }
-        err.textContent = resp.status === 401 ? 'Wrong password. Try again.' : 'Login failed. Try again.';
-      } catch (e) {
-        err.textContent = 'Network error. Try again.';
-      }
-      box.classList.remove('shake');
-      void box.offsetWidth; // trigger reflow
-      box.classList.add('shake');
-      pwInput.value = '';
-      pwInput.focus();
-    }
-
-    // Enter key on password field
-    document.getElementById('loginPassword').addEventListener('keydown', e => {
-      if (e.key === 'Enter') attemptLogin();
-    });
-
-    // Restore session if a token is present (will be validated on first API call)
-    if (sessionStorage.getItem('bella_token')) {
-      document.getElementById('loginGate').classList.add('hidden');
-      document.getElementById('mainApp').style.display = '';
-      if (window._matrixInterval) clearInterval(window._matrixInterval);
-      init();
-    }
+    // The playground is open (no login) — load immediately.
+    init();
   </script>
 </body>
 </html>

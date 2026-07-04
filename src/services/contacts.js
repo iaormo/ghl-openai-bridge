@@ -1,5 +1,5 @@
 const GHL_API_BASE = "https://services.leadconnectorhq.com";
-const LOCATION_ID = process.env.GHL_LOCATION_ID || "JYNTUGxvUZVoROmjpf50";
+const LOCATION_ID = process.env.GHL_LOCATION_ID || "GfDBeSbJmjBtcqGK6vXN";
 
 function headers(version = "2021-07-28") {
   return {

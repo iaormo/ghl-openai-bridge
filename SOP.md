@@ -2,8 +2,8 @@
 
 ## Standard Operating Procedure
 
-**Project:** GHL-OpenAI Webhook Bridge (Bella AI Chatbot)
-**Client:** Breys Minglanilla Beauty & Skincare Co.
+**Project:** GHL-OpenAI Webhook Bridge (Skye AI Chatbot)
+**Client:** ScalePlus (AI Automation Agency — scaleplus.io)
 **Author:** Ian James Ormo
 **Date Created:** March 6, 2026
 **Last Updated:** March 6, 2026
@@ -20,7 +20,7 @@
 5. [Local Development Setup](#5-local-development-setup)
 6. [Railway Deployment](#6-railway-deployment)
 7. [GoHighLevel (GHL) Configuration](#7-gohighlevel-ghl-configuration)
-8. [OpenAI Assistant Configuration](#8-openai-assistant-configuration)
+8. [OpenAI Configuration (Responses API)](#8-openai-configuration-responses-api)
 9. [Bot Capabilities & Function Tools](#9-bot-capabilities--function-tools)
 10. [Message Flow (End-to-End)](#10-message-flow-end-to-end)
 11. [Loop Prevention & Deduplication](#11-loop-prevention--deduplication)
@@ -40,12 +40,14 @@
 
 ### What It Does
 
-This is a **webhook bridge** that connects **GoHighLevel (GHL)** to **OpenAI** to power an AI chatbot named **Bella** for Breys Minglanilla Beauty & Skincare Co.
+This is a **webhook bridge** that connects **GoHighLevel (GHL)** to **OpenAI** to power an AI chatbot named **Skye** for **ScalePlus** (AI automation agency, scaleplus.io). Skye acts as a knowledgebase, an appointment setter (books free automation-audit calls), and a virtual assistant that qualifies leads.
 
-When a customer sends a message on **Facebook Messenger** (through GHL), this bridge:
+The bot's knowledge and behavior live in **`brain.md`** at the repo root — a single editable file that is injected into the system prompt on every request (see Section 8).
+
+When a lead sends a message on **Facebook Messenger** (through GHL), this bridge:
 
 1. Receives the message via a webhook from GHL
-2. Sends it to OpenAI's Chat Completions API (using the Bella assistant's instructions)
+2. Sends it to OpenAI's Responses API (using `brain.md` as the system instructions)
 3. Executes any required function calls (booking appointments, updating contacts, etc.)
 4. Sends the AI's reply back to GHL, which delivers it to the customer on Messenger
 
@@ -55,7 +57,7 @@ When a customer sends a message on **Facebook Messenger** (through GHL), this br
 | ---------------- | ----------------------------------- |
 | Runtime          | Node.js 20                          |
 | Web Framework    | Express.js 4                        |
-| AI Engine        | OpenAI Chat Completions (gpt-4o-mini) |
+| AI Engine        | OpenAI Responses API (gpt-4o-mini)  |
 | Database         | PostgreSQL (Railway-hosted)         |
 | Hosting          | Railway (Docker deployment)         |
 | CRM / Messaging  | GoHighLevel (GHL) API v2            |
@@ -94,8 +96,8 @@ GoHighLevel (GHL)
 |    4. Respond 200 immediately            |
 |    5. Async processing begins:           |
 |                                          |
-|  +-- OpenAI Chat Completions API ---+    |
-|  |   - System prompt (Bella)        |    |
+|  +-- OpenAI Responses API ----------+    |
+|  |   - System prompt (+ brain.md)   |    |
 |  |   - Conversation history (PG)    |    |
 |  |   - Function calling tools       |    |
 |  |   - Up to 5 tool call rounds     |    |
@@ -146,17 +148,26 @@ ghl-openai-bridge/
 |-- package.json            # Node.js dependencies & scripts
 |-- package-lock.json       # Locked dependency versions
 |-- railway.json            # Railway deployment configuration
+|-- brain.md                # THE BOT'S BRAIN — all knowledge & playbooks (edit this)
 |-- SOP.md                  # This document
+|
+|-- public/
+|   |-- index.html          # Skye's Playground admin UI
 |
 |-- src/
     |-- index.js            # Main Express server entry point
     |-- db.js               # PostgreSQL connection & message storage
     |
+    |-- middleware/
+    |   |-- auth.js         # Playground login (JWT-style token)
+    |
     |-- routes/
     |   |-- webhook.js      # All webhook endpoints (inbound, debug, capture, test)
+    |   |-- playground.js   # Playground admin API (config, tools, fields, brain)
     |
     |-- services/
-        |-- openai.js       # OpenAI Chat Completions + function tool definitions
+        |-- openai.js       # OpenAI Responses API + function tool definitions
+        |-- brain.js        # Loads & caches brain.md into the system prompt
         |-- ghl.js          # GHL Conversations API (send replies)
         |-- calendar.js     # GHL Calendar API (slots, booking, reschedule, cancel)
         |-- contacts.js     # GHL Contacts API (get, update, custom fields)
@@ -192,9 +203,16 @@ ghl-openai-bridge/
 #### `src/services/openai.js` — AI Engine
 
 - Lazy-initializes OpenAI client (prevents crash when API key is missing)
-- Fetches and caches the Bella assistant's system prompt from OpenAI
-- Injects fresh Manila date context + 7-day day-of-week mapping into every request
-- Defines 9 function calling tools (see Section 9)
+- Uses the OpenAI **Responses API** (`client.responses.create`) — NOT the deprecated Assistants API
+- Builds the system instructions from **brain.md** (`getBrain()`) + fresh Manila date context — no hosted OpenAI assistant is used
+- Injects a 7-day day-of-week mapping into every request
+- Defines 9 function calling tools (see Section 9); converts them to the Responses API tool shape via `responsesTools()`
+
+#### `src/services/brain.js` — Knowledge Loader
+
+- **`getBrain()`** — Reads and caches `brain.md` from the repo root; returns it as a string
+- **`reloadBrain()`** — Clears the cache and re-reads (used by `POST /playground/brain/reload`)
+- brain.md is appended to the system prompt on every request, so editing it changes what Skye knows and how it behaves
 - **`chat(contactId, message)`** — Main function: loads history, calls OpenAI, handles tool calls (up to 5 rounds), saves messages, returns reply
 - **`executeTool(toolCall, contactId)`** — Dispatches function calls to the appropriate service
 
@@ -218,7 +236,7 @@ ghl-openai-bridge/
 
 - **`getContactInfo(contactId)`** — Retrieves contact details (name, phone, email, tags, custom fields)
 - **`updateContactInfo(contactId, data)`** — Updates name, phone, and/or email
-- **`updateCustomField(contactId, key, value)`** — Updates a custom field (e.g., `availed_service`)
+- **`updateCustomField(contactId, key, value)`** — Updates a custom field (e.g., `pain_points`, `industry`)
 - Handles full name splitting (first name / last name)
 - Strips phone number formatting (spaces, dashes)
 
@@ -232,8 +250,9 @@ ghl-openai-bridge/
 | --------------------- | ---------------------------------------- | ------------------------------------ |
 | `DATABASE_URL`        | PostgreSQL connection string             | `postgresql://user:pass@host:5432/db`|
 | `OPENAI_API_KEY`      | OpenAI API key                           | `sk-proj-...`                        |
-| `OPENAI_ASSISTANT_ID` | Existing OpenAI Assistant ID             | `asst_19Z7WGu2VRQkAawPPfJBtzel`     |
 | `GHL_API_KEY`         | GHL Private Integration Token            | `pit-...`                            |
+
+> Note: `OPENAI_ASSISTANT_ID` is **no longer used** — the bot runs on the Responses API with `brain.md` as the system prompt, so there is no hosted assistant. The Playground has **no password** (open access).
 
 ### Optional Variables (with defaults)
 
@@ -242,8 +261,8 @@ ghl-openai-bridge/
 | `PORT`                | `3000`                         | Server port                    |
 | `NODE_ENV`            | (not set)                      | Set to `production` on Railway |
 | `OPENAI_MODEL`        | `gpt-4o-mini`                  | OpenAI model to use            |
-| `GHL_LOCATION_ID`     | `JYNTUGxvUZVoROmjpf50`        | GHL location ID                |
-| `GHL_CALENDAR_ID`     | `6ZLEA0dTsCE67OOAmQnU`        | GHL calendar ID                |
+| `GHL_LOCATION_ID`     | `GfDBeSbJmjBtcqGK6vXN`        | ScalePlus GHL location ID      |
+| `GHL_CALENDAR_ID`     | `hpj5HNU9F20BClTjiVTY`        | ScalePlus audit-call calendar  |
 | `GHL_TIMEZONE`        | `Asia/Manila`                  | Timezone for date handling     |
 | `GHL_DEFAULT_CHANNEL` | `FB`                           | Default message channel type   |
 
@@ -308,10 +327,10 @@ curl -X POST http://localhost:3000/webhook/inbound \
 3. **Add PostgreSQL:** Click "New" > "Database" > "PostgreSQL". Railway automatically sets `DATABASE_URL`
 4. **Set environment variables** in the Railway dashboard:
    - `OPENAI_API_KEY`
-   - `OPENAI_ASSISTANT_ID` = `asst_19Z7WGu2VRQkAawPPfJBtzel`
-   - `GHL_API_KEY` = your GHL Private Integration Token
-   - `GHL_LOCATION_ID` = `JYNTUGxvUZVoROmjpf50`
-   - `GHL_CALENDAR_ID` = `6ZLEA0dTsCE67OOAmQnU`
+   - `GHL_API_KEY` = your ScalePlus GHL Private Integration Token (regenerate the leaked token first — see Security)
+   - `GHL_LOCATION_ID` = `GfDBeSbJmjBtcqGK6vXN`
+   - `GHL_CALENDAR_ID` = `hpj5HNU9F20BClTjiVTY`
+   - `OPENAI_MODEL` = `gpt-4o-mini` (or another Responses-API-capable model)
    - `NODE_ENV` = `production`
 5. **Generate a domain:** Settings > Networking > Generate Domain
    - Current domain: `ghl-openai-bridge-production.up.railway.app`
@@ -374,7 +393,7 @@ This is what GHL sends to the webhook (actual captured payload):
 ```json
 {
   "type": "InboundMessage",
-  "locationId": "JYNTUGxvUZVoROmjpf50",
+  "locationId": "GfDBeSbJmjBtcqGK6vXN",
   "contact_id": "abc123def456",
   "message_id": "msg_789",
   "direction": "inbound",
@@ -383,7 +402,7 @@ This is what GHL sends to the webhook (actual captured payload):
     "body": "Hi, I want to book an appointment"
   },
   "location": {
-    "id": "JYNTUGxvUZVoROmjpf50"
+    "id": "GfDBeSbJmjBtcqGK6vXN"
   }
 }
 ```
@@ -423,22 +442,38 @@ All endpoints use base URL: `https://services.leadconnectorhq.com`
 
 ---
 
-## 8. OpenAI Assistant Configuration
+## 8. OpenAI Configuration (Responses API)
 
-### Assistant Details
+### Engine Details
 
 | Property     | Value                              |
 | ------------ | ---------------------------------- |
-| Assistant ID | `asst_19Z7WGu2VRQkAawPPfJBtzel`   |
-| Model        | `gpt-4o-mini` (configurable)       |
-| Name         | Bella (Breys AI Chatbot)           |
+| API          | OpenAI **Responses API** (`client.responses.create`) |
+| Model        | `gpt-4o-mini` (via `OPENAI_MODEL`, runtime-settable in Playground) |
+| Name         | Skye (ScalePlus AI Chatbot)        |
+| System prompt| `brain.md` (no hosted OpenAI assistant) |
 
-### How the Assistant's Instructions Are Used
+**Why the Responses API:** OpenAI is deprecating the Assistants API. This bot never depended on
+it for inference — it now runs entirely on the Responses API and stores no server-side assistant
+object. The system prompt comes from the local `brain.md` file, so nothing breaks when the
+Assistants API sunsets.
 
-1. On first request, the bridge fetches the assistant's instructions from the OpenAI API using `beta.assistants.retrieve()`
-2. The instructions are **cached in memory** (fetched only once per server restart)
-3. For every chat request, the instructions are used as the `system` message
-4. A fresh **Manila date/time context** is appended to the system prompt on every request
+### How the System Prompt Is Built
+
+For every request, `openai.js` builds the `instructions` field as:
+**`brain.md` (persona + knowledge + playbooks) + fresh Manila date context.**
+
+There is no `beta.assistants.retrieve()` call and no `OPENAI_ASSISTANT_ID`. Conversation history
+is passed as the Responses API `input` array; function tools are converted to the Responses
+(flat) tool shape via `responsesTools()`; tool results are fed back as `function_call_output`
+items. `store: false` keeps each call stateless (we manage history ourselves in Postgres).
+
+### Editing the Bot's Knowledge (brain.md)
+
+- `brain.md` at the repo root is the single source of truth for what Skye knows (about ScalePlus, services, pricing, FAQs, testimonials) and how it behaves (qualification + appointment-setting playbooks).
+- To change the bot's knowledge: edit `brain.md`, commit, and push (Railway redeploys). Or hit `POST /playground/brain/reload` to re-read it without a restart.
+- View the live brain at `GET /playground/brain`.
+- Note: Railway's filesystem is ephemeral, so brain.md edits must be committed to git to survive redeploys.
 
 ### System Prompt Injection (Date Context)
 
@@ -495,11 +530,11 @@ The bot has **9 function calling tools** that allow it to interact with GHL:
 
 ### Tool 4: `updateCustomField`
 
-- **Purpose:** Update a custom field on the contact record
+- **Purpose:** Update a custom field on the contact record for lead qualification
 - **Parameters:**
-  - `key` (required) — Field key (e.g., `availed_service`)
+  - `key` (required) — Field key: `business_name`, `industry`, `team_size`, `current_tools`, `pain_points`, `service_interest`, `budget_timeline`, `lead_status`
   - `value` (required) — Value to set
-- **Usage:** Tracks which service(s) the customer is interested in
+- **Usage:** Captures qualification info (business, pain points, tools, timeline, funnel stage) as the lead shares it
 
 ### Tool 5: `getAvailableSlots`
 
@@ -511,14 +546,14 @@ The bot has **9 function calling tools** that allow it to interact with GHL:
 
 ### Tool 6: `appointmentBooking`
 
-- **Purpose:** Book an appointment for the customer
+- **Purpose:** Book the free automation audit / consultation call for the lead
 - **Parameters:**
   - `date_time` (required) — ISO format with timezone (e.g., `2026-03-08T14:00:00+08:00`)
-  - `service` (required) — Service being booked
+  - `service` (required) — Call topic (e.g. "Automation Audit — chatbot for dental clinic")
   - `customer_name` (optional) — For the appointment title
-  - `phone` (optional) — Customer's phone
-- **Title format:** `{CustomerName} x Breys - {Service}`
-- **Important:** Only called after the customer confirms the slot
+  - `phone` (optional) — Lead's phone
+- **Title format:** `{LeadName} x ScalePlus - {Topic}`
+- **Important:** Only called after the lead confirms the slot
 
 ### Tool 7: `getContactAppointments`
 
@@ -578,11 +613,10 @@ The bot can chain up to **5 rounds** of tool calls per message. For example:
    { "success": true, "contactId": "abc123", "status": "processing" }
 
 6. BRIDGE processes async (after response sent):
-   a. Load assistant instructions (cached)
-   b. Append Manila date context
-   c. Load last 20 messages from PostgreSQL
-   d. Build messages array: [system, ...history, user]
-   e. Call OpenAI Chat Completions API
+   a. Build instructions = brain.md + Manila date context
+   b. Load last 20 messages from PostgreSQL
+   c. Build Responses input: [...history, user message]
+   d. Call OpenAI Responses API (instructions + input + tools)
 
 7. OPENAI may request function calls:
    a. Bridge executes the tool (e.g., getAvailableSlots)
@@ -663,7 +697,7 @@ const reply = await chat(contactId, message);
 
 | Property     | Value                          |
 | ------------ | ------------------------------ |
-| Calendar ID  | `6ZLEA0dTsCE67OOAmQnU`        |
+| Calendar ID  | `hpj5HNU9F20BClTjiVTY`        |
 | Type         | Service Request                |
 | Slot Duration | 30 minutes                    |
 | Timezone     | Asia/Manila (UTC+8)            |
@@ -680,7 +714,7 @@ const reply = await chat(contactId, message);
 
 1. Customer confirms a time slot
 2. Bot calls `appointmentBooking` with date_time, service, customer_name
-3. Bridge creates the appointment title: `{Name} x Breys - {Service}`
+3. Bridge creates the appointment title: `{Name} x ScalePlus - {Topic}`
 4. Bridge sends POST to GHL Calendar API with:
    - `calendarId`, `locationId`, `contactId`
    - `startTime` (ISO format with +08:00 offset)
@@ -728,11 +762,11 @@ When a customer provides their name or phone number, the bot immediately calls `
 
 ### Custom Fields
 
-The `updateCustomField` tool is used to track service preferences:
+The `updateCustomField` tool is used to capture lead qualification info:
 
 ```
-Key: "availed_service"
-Value: "Facial Treatment, Chemical Peel"
+Key: "pain_points"
+Value: "Drowning in Facebook inquiries, no one to answer after hours"
 ```
 
 - Looks up the field by key name in the contact's existing custom fields
@@ -802,7 +836,7 @@ Request body (from GHL):
   "contact_id": "abc123",
   "direction": "inbound",
   "message": { "type": 11, "body": "Hello" },
-  "location": { "id": "JYNTUGxvUZVoROmjpf50" }
+  "location": { "id": "GfDBeSbJmjBtcqGK6vXN" }
 }
 ```
 
@@ -917,7 +951,7 @@ This tests the full flow including OpenAI and GHL reply.
 ### Error: "thread already has active run"
 
 **Cause:** Previous Assistants API run is still active.
-**Fix:** Migrated to Chat Completions API which doesn't have this issue.
+**Fix:** No longer applicable — the bot runs on the stateless Responses API (no threads/runs).
 
 ### Error: Booking on wrong day
 
@@ -952,7 +986,7 @@ This tests the full flow including OpenAI and GHL reply.
 ### Error: Bot gets stuck after customer gives name/phone
 
 **Cause:** Bot's system prompt references tools that weren't defined.
-**Fix:** All 9 tools matching the Bella prompt must be registered.
+**Fix:** All 9 tools matching the Skye prompt must be registered.
 
 ---
 
@@ -972,12 +1006,15 @@ git push origin main
 
 ### Updating the Bot's Personality/Instructions
 
-1. Go to [OpenAI Platform](https://platform.openai.com/assistants)
-2. Find assistant `asst_19Z7WGu2VRQkAawPPfJBtzel`
-3. Update the instructions
-4. **Restart the Railway deployment** (or wait for next deploy) to clear the cached instructions
+The bot's persona and knowledge are in `brain.md` (no OpenAI assistant to edit):
 
-Note: The bridge caches the assistant instructions in memory. To pick up changes immediately, trigger a redeploy.
+1. Edit `brain.md` at the repo root
+2. Commit and push (`git push origin main`) — Railway auto-deploys
+3. For a live hot-edit without redeploy: use the Playground **Prompt** tab (Save to brain.md) or
+   hit `POST /playground/brain/reload`
+
+Note: Railway's filesystem is ephemeral, so Playground edits to brain.md survive only until the
+next redeploy. Permanent changes must be committed to git.
 
 ### Database Maintenance
 
@@ -1023,7 +1060,7 @@ No code changes needed. Just set up the GHL workflow to trigger the webhook for 
 1. Define the tool in the `tools` array in `src/services/openai.js`
 2. Add the case to the `executeTool` switch statement
 3. Implement the backend function in the appropriate service file
-4. Update the assistant's instructions in OpenAI if the bot needs to know about the new tool
+4. Update `brain.md` if the bot needs guidance on when to use the new tool
 5. Push to GitHub (auto-deploys)
 
 ---
@@ -1073,11 +1110,11 @@ Currently, the webhook accepts any POST request. For additional security:
 
 ### Optimization History
 
-1. **Assistants API → Chat Completions API** — Reduced response time from 8-10s to 3-4s
-2. **Streaming removed** — Chat Completions is fast enough without streaming
+1. **Assistants API → Responses API** — off the deprecating Assistants API; stateless, no thread/run overhead
+2. **Streaming removed** — the Responses API call is fast enough without streaming
 3. **Lazy initialization** — OpenAI client and DB pool created on first use, not at startup
 4. **Parallel operations** — Message saving and history loading done in parallel
-5. **Cached system prompt** — Assistant instructions fetched once, reused for all requests
+5. **Local system prompt** — `brain.md` read once and cached in memory (no per-request API fetch)
 6. **Channel type caching** — GHL channel detected from webhook, no extra API call
 
 ### If You Need to Scale

@@ -1,10 +1,9 @@
 const express = require("express");
 const {
   playgroundChat,
-  getSystemPrompt,
-  getClient,
   setApiKey,
-  setAssistantId,
+  getModel,
+  setModel,
   tools,
   getManilaDateContext,
 } = require("../services/openai");
@@ -15,15 +14,10 @@ const {
   updateContactInfo,
 } = require("../services/contacts");
 const { getLocationCalendars } = require("../services/calendar");
-const { loginHandler, requireAuth } = require("../middleware/auth");
+const { getBrain, reloadBrain, BRAIN_PATH } = require("../services/brain");
+const fs = require("fs");
 
 const router = express.Router();
-
-// Public: login endpoint
-router.post("/login", loginHandler);
-
-// All other /playground routes require a valid token
-router.use(requireAuth);
 
 // Runtime-added tools and custom fields (in-memory, persists for server lifetime)
 const dynamicTools = [];
@@ -35,21 +29,51 @@ const removedBuiltinFieldKeys = new Set();
 // GET /playground/config — current config
 router.get("/config", async (req, res) => {
   try {
-    const systemPrompt = await getSystemPrompt();
     res.json({
-      model: process.env.OPENAI_MODEL || "gpt-4o-mini",
-      assistantId: process.env.OPENAI_ASSISTANT_ID || "",
+      model: getModel(),
       hasApiKey: !!process.env.OPENAI_API_KEY,
       hasGhlKey: !!process.env.GHL_API_KEY,
-      systemPrompt,
+      // Full key values so the Settings tab can pre-fill them. NOTE: these come from
+      // environment variables at runtime (never from committed code). Because the
+      // playground has no password, anyone who loads it can read these — by owner's choice.
+      openaiKey: process.env.OPENAI_API_KEY || "",
+      ghlKey: process.env.GHL_API_KEY || "",
+      systemPrompt: getBrain(),
       dateContext: getManilaDateContext(),
-      calendarId: process.env.GHL_CALENDAR_ID || "6ZLEA0dTsCE67OOAmQnU",
-      locationId: process.env.GHL_LOCATION_ID || "JYNTUGxvUZVoROmjpf50",
+      calendarId: process.env.GHL_CALENDAR_ID || "hpj5HNU9F20BClTjiVTY",
+      locationId: process.env.GHL_LOCATION_ID || "GfDBeSbJmjBtcqGK6vXN",
       timezone: process.env.GHL_TIMEZONE || "Asia/Manila",
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// GET /playground/brain — view the brain.md knowledge base (the system prompt)
+router.get("/brain", (req, res) => {
+  res.type("text/markdown").send(getBrain());
+});
+
+// POST /playground/brain — write brain.md and refresh the cache.
+// Note: Railway's filesystem is ephemeral, so permanent edits should go through git.
+router.post("/brain", (req, res) => {
+  const { content } = req.body;
+  if (typeof content !== "string") {
+    return res.status(400).json({ error: "content must be a string" });
+  }
+  try {
+    fs.writeFileSync(BRAIN_PATH, content, "utf8");
+    const brain = reloadBrain();
+    res.json({ success: true, length: brain.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /playground/brain/reload — re-read brain.md from disk (after a git deploy)
+router.post("/brain/reload", (req, res) => {
+  const brain = reloadBrain();
+  res.json({ success: true, length: brain.length });
 });
 
 // GET /playground/tools — list all tools (built-in + dynamic)
@@ -159,8 +183,8 @@ router.post("/chat", async (req, res) => {
 router.get("/calendars", (req, res) => {
   const builtinCals = [
     {
-      id: process.env.GHL_CALENDAR_ID || "6ZLEA0dTsCE67OOAmQnU",
-      name: "Breys Minglanilla",
+      id: process.env.GHL_CALENDAR_ID || "hpj5HNU9F20BClTjiVTY",
+      name: "ScalePlus Audit Calls",
       description: "Default calendar",
       source: "builtin",
     },
@@ -216,14 +240,14 @@ router.delete("/calendars/:id", (req, res) => {
 // GET /playground/custom-fields — list built-in + synced custom fields
 router.get("/custom-fields", (req, res) => {
   const builtinFields = [
-    { key: "availed_service", description: "Service(s) the customer availed", source: "builtin" },
-    { key: "product_interest", description: "Product(s) customer is interested in", source: "builtin" },
-    { key: "order_quantity", description: "Quantity and breakdown", source: "builtin" },
-    { key: "order_total", description: "Total order amount", source: "builtin" },
-    { key: "payment_method", description: "Payment method (GCash or COD)", source: "builtin" },
-    { key: "shipping_address", description: "Complete delivery address", source: "builtin" },
-    { key: "order_status", description: "Order status", source: "builtin" },
-    { key: "payment_reference", description: "GCash reference number", source: "builtin" },
+    { key: "business_name", description: "The lead's company or business name", source: "builtin" },
+    { key: "industry", description: "Industry or type of business", source: "builtin" },
+    { key: "team_size", description: "Number of people on their team", source: "builtin" },
+    { key: "current_tools", description: "CRM/tools/systems they currently use", source: "builtin" },
+    { key: "pain_points", description: "Biggest manual bottleneck / time sink", source: "builtin" },
+    { key: "service_interest", description: "What they want (chatbot, automation, CRM, custom build, CRM trial)", source: "builtin" },
+    { key: "budget_timeline", description: "Budget comfort and desired start timeline", source: "builtin" },
+    { key: "lead_status", description: "Funnel stage: new, qualified, audit_booked, follow_up, not_a_fit", source: "builtin" },
   ].filter((f) => !removedBuiltinFieldKeys.has(f.key));
   const builtinKeys = new Set(builtinFields.map((f) => f.key));
   const extras = customFields.filter((f) => !builtinKeys.has(f.key));
@@ -355,80 +379,15 @@ router.post("/settings/api-key", (req, res) => {
   }
 });
 
-// POST /playground/settings/assistant-id — change assistant and reload prompt
-router.post("/settings/assistant-id", async (req, res) => {
-  const { assistantId } = req.body;
-  if (!assistantId || !assistantId.startsWith("asst_")) {
-    return res.status(400).json({ error: "Invalid Assistant ID format (must start with asst_)" });
+// POST /playground/settings/model — set the default model used for chats (runtime).
+// Temperature/top_p are applied per-request from the Playground; they aren't persisted here.
+router.post("/settings/model", (req, res) => {
+  const { model } = req.body;
+  if (!model) {
+    return res.status(400).json({ error: "model is required" });
   }
-  try {
-    const systemPrompt = await setAssistantId(assistantId);
-    res.json({ success: true, systemPrompt });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// POST /playground/settings/prompt — save prompt to the OpenAI assistant
-router.post("/settings/prompt", async (req, res) => {
-  const { instructions } = req.body;
-  if (typeof instructions !== "string") {
-    return res.status(400).json({ error: "instructions must be a string" });
-  }
-  try {
-    const client = getClient();
-    const assistantId = process.env.OPENAI_ASSISTANT_ID;
-    if (!assistantId) {
-      return res.status(400).json({ error: "No OPENAI_ASSISTANT_ID configured" });
-    }
-    await client.beta.assistants.update(assistantId, { instructions });
-    // Also update the cached prompt via setAssistantId (re-fetches)
-    await setAssistantId(assistantId);
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// POST /playground/settings/model — save model settings to the OpenAI assistant
-router.post("/settings/model", async (req, res) => {
-  const { model, temperature, top_p } = req.body;
-  try {
-    const client = getClient();
-    const assistantId = process.env.OPENAI_ASSISTANT_ID;
-    if (!assistantId) {
-      return res.status(400).json({ error: "No OPENAI_ASSISTANT_ID configured" });
-    }
-    const update = {};
-    if (model) update.model = model;
-    if (temperature !== undefined) update.temperature = parseFloat(temperature);
-    if (top_p !== undefined) update.top_p = parseFloat(top_p);
-    await client.beta.assistants.update(assistantId, update);
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// GET /playground/assistant — fetch assistant details from OpenAI
-router.get("/assistant", async (req, res) => {
-  try {
-    const client = getClient();
-    const assistant = await client.beta.assistants.retrieve(
-      process.env.OPENAI_ASSISTANT_ID
-    );
-    res.json({
-      id: assistant.id,
-      name: assistant.name,
-      model: assistant.model,
-      instructions: assistant.instructions,
-      tools: assistant.tools,
-      temperature: assistant.temperature,
-      top_p: assistant.top_p,
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  setModel(model);
+  res.json({ success: true, model: getModel() });
 });
 
 // GET /playground/contact/:id — fetch a contact from GHL

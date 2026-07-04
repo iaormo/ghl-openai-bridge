@@ -13,9 +13,9 @@ const {
   updateContactInfo,
   updateCustomField,
 } = require("./contacts");
+const { getBrain } = require("./brain");
 
 let openai = null;
-let systemPrompt = null;
 
 function getClient() {
   if (!openai) {
@@ -31,34 +31,19 @@ function setApiKey(apiKey) {
   console.log("OpenAI API key updated at runtime");
 }
 
-// Allow runtime assistant ID override — re-fetches instructions
-async function setAssistantId(assistantId) {
-  process.env.OPENAI_ASSISTANT_ID = assistantId;
-  systemPrompt = null; // clear cache so it re-fetches
-  const prompt = await getSystemPrompt();
-  console.log("Assistant ID updated to:", assistantId);
-  return prompt;
+function getModel() {
+  return process.env.OPENAI_MODEL || "gpt-4o-mini";
 }
 
-// Fetch the assistant's instructions once and cache them
-async function getSystemPrompt() {
-  if (systemPrompt) return systemPrompt;
-
-  try {
-    const assistant = await getClient().beta.assistants.retrieve(
-      process.env.OPENAI_ASSISTANT_ID
-    );
-    systemPrompt = assistant.instructions || "You are a helpful assistant.";
-    console.log("Loaded assistant instructions (cached)");
-  } catch (err) {
-    console.warn("Could not fetch assistant instructions:", err.message);
-    systemPrompt = "You are a helpful assistant.";
-  }
-
-  return systemPrompt;
+// Allow runtime model override (used by the Playground)
+function setModel(model) {
+  if (model) process.env.OPENAI_MODEL = model;
+  return getModel();
 }
 
-// All OpenAI function tool definitions
+// All function tool definitions. Kept in the Chat-Completions "nested" shape so the
+// Playground tool manager can read/write t.function.*; converted to the Responses API
+// (flat) shape at call time via responsesTools().
 const tools = [
   {
     type: "function",
@@ -84,9 +69,9 @@ const tools = [
       parameters: {
         type: "object",
         properties: {
-          name: { type: "string", description: "Customer's full name" },
-          phone: { type: "string", description: "Customer's phone number (e.g. 09171234567)" },
-          email: { type: "string", description: "Customer's email address" },
+          name: { type: "string", description: "Lead's full name" },
+          phone: { type: "string", description: "Lead's phone number (with country code where relevant, e.g. +639171234567)" },
+          email: { type: "string", description: "Lead's email address" },
         },
       },
     },
@@ -95,16 +80,16 @@ const tools = [
     type: "function",
     function: {
       name: "updateCustomField",
-      description: `Update a custom field on the contact record. Available custom field keys:
-- 'availed_service' — service(s) the customer availed or is interested in
-- 'product_interest' — product(s) customer is interested in (e.g. AquaSkin Glutathione, Kaizen C+)
-- 'order_quantity' — quantity and breakdown (e.g. '4 bottles Glutathione + 1 free + 2 Kaizen C+')
-- 'order_total' — total order amount (e.g. '₱6,920')
-- 'payment_method' — payment method chosen (GCash or COD)
-- 'shipping_address' — complete delivery address
-- 'order_status' — order status (pending, paid, shipped, delivered)
-- 'payment_reference' — GCash reference number after payment
-Call this to save order details whenever the customer confirms an order, provides payment info, or gives their address.`,
+      description: `Update a custom field on the contact record to capture lead qualification info. Available custom field keys:
+- 'business_name' — the lead's company or business name
+- 'industry' — their industry or type of business (e.g. dental clinic, e-commerce, real estate)
+- 'team_size' — number of people on their team, especially on repetitive work
+- 'current_tools' — the CRM/tools/systems they currently use
+- 'pain_points' — their biggest manual bottleneck or the thing eating their time
+- 'service_interest' — what they want (chatbot, automation, CRM, custom build, or ScalePlus CRM trial)
+- 'budget_timeline' — budget comfort and desired start timeline (only if it comes up naturally)
+- 'lead_status' — funnel stage: one of 'new', 'qualified', 'audit_booked', 'follow_up', 'not_a_fit'
+Call this whenever the lead shares qualification info (business details, pain points, tools, or timeline). Save each detail as it comes up.`,
       parameters: {
         type: "object",
         properties: {
@@ -113,14 +98,6 @@ Call this to save order details whenever the customer confirms an order, provide
         },
         required: ["key", "value"],
       },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "getProductCatalog",
-      description: "Get the full product catalog with pricing, promotions, and payment information. Call this when a customer asks about products, prices, or how to order.",
-      parameters: { type: "object", properties: {} },
     },
   },
   {
@@ -142,14 +119,14 @@ Call this to save order details whenever the customer confirms an order, provide
     type: "function",
     function: {
       name: "appointmentBooking",
-      description: "Book an appointment for the customer. Requires contact name, phone, service, date and time. Only call after the customer confirms the slot.",
+      description: "Book the free automation audit / consultation call for the lead. Requires their name, the call topic, and the confirmed date and time. Only call after the lead confirms the slot.",
       parameters: {
         type: "object",
         properties: {
           date_time: { type: "string", description: "Appointment date and time in ISO format (e.g. 2026-03-08T14:00:00+08:00)" },
-          service: { type: "string", description: "The service being booked" },
-          customer_name: { type: "string", description: "Customer's name for the appointment title" },
-          phone: { type: "string", description: "Customer's phone number" },
+          service: { type: "string", description: "The topic of the call (e.g. 'Automation Audit — chatbot for dental clinic')" },
+          customer_name: { type: "string", description: "Lead's name for the appointment title" },
+          phone: { type: "string", description: "Lead's phone number" },
         },
         required: ["date_time", "service"],
       },
@@ -194,10 +171,19 @@ Call this to save order details whenever the customer confirms an order, provide
   },
 ];
 
-// Execute a tool call
-async function executeTool(toolCall, contactId) {
-  const name = toolCall.function.name;
-  const args = JSON.parse(toolCall.function.arguments || "{}");
+// Convert the internal tools registry to the Responses API (flat) function-tool shape.
+function responsesTools(activeTools) {
+  return activeTools.map((t) => ({
+    type: "function",
+    name: t.function.name,
+    description: t.function.description,
+    parameters: t.function.parameters,
+  }));
+}
+
+// Execute a single function call by name + raw JSON argument string.
+async function runTool(name, argsString, contactId) {
+  const args = JSON.parse(argsString || "{}");
 
   try {
     switch (name) {
@@ -230,50 +216,6 @@ async function executeTool(toolCall, contactId) {
         return JSON.stringify(result);
       }
 
-      case "getProductCatalog": {
-        return JSON.stringify({
-          products: [
-            {
-              name: "AquaSkin Premium Glutathione",
-              price: 1455,
-              currency: "PHP",
-              price_display: "₱1,455 per bottle",
-              description: "Japanese FDA-approved supplement trusted by 500+ Cebu clients",
-              benefits: ["Skin brightening/whitening", "Antioxidant defense", "Promotes restful sleep", "Youthful glow"],
-              how_to_use: "1-2 capsules before bedtime",
-              fda_registration: "#4000006996192",
-            },
-            {
-              name: "AquaSkin Kaizen C+ (30 capsules)",
-              price: 550,
-              currency: "PHP",
-              price_display: "₱550 per bottle",
-              description: "First-ever Japan non-acidic Vitamin C in frosted glass bottle with 10-in-1 premium ingredients",
-              unique_features: ["100% Made in Japan", "Non-irritating even on empty stomach", "Japanese desiccant inside bottle", "Classy frosted glass packaging"],
-              benefits: ["High antioxidant & Vitamin C", "Natural anti-inflammatory", "Immune system support", "Helps regulate insulin", "Aids in red-blood-cell formation & anemia prevention", "May reduce cholesterol/blood sugar/risk of heart disease or cancer", "Promotes overall growth & development", "Helps with PCOS"],
-              key_ingredients: ["Rosehips", "Sodium Ascorbate", "Curcumin", "Quercetin", "Beta Glucan", "Zinc Gluconate", "Turmeric", "Vitamin B6", "Vitamin B12", "Inositol"],
-            },
-          ],
-          promotions: [
-            { name: "Buy 4 Get 1 Free", description: "For every 4 bottles of Glutathione purchased, 1 additional bottle is included free", applies_to: "AquaSkin Glutathione" },
-            { name: "Free Shipping (Cebu only)", description: "Orders of 2 or more bottles get free shipping within Cebu" },
-            { name: "Upsell Pairing", description: "Kaizen C+ is positioned as a complement to Glutathione for enhanced whitening and health results" },
-          ],
-          payment: {
-            gcash: { number: "09178092224", account_name: "Lory Mae Ormo", display_name: "LO.Y M.. O." },
-            cod: { available: true, area: "Cebu addresses only" },
-            outside_cebu: "Team confirms courier options and shipping fee separately before providing final total and payment instructions",
-          },
-          pricing_guide: {
-            glutathione_1: "₱1,455",
-            glutathione_2: "₱2,910 (free shipping in Cebu)",
-            glutathione_4: "₱5,820 (+ 1 FREE bottle, free shipping in Cebu)",
-            kaizen_1: "₱550",
-            kaizen_2: "₱1,100 (free shipping in Cebu)",
-          },
-        });
-      }
-
       case "getAvailableSlots": {
         const endDate = args.end_date || args.start_date;
         const slots = await getAvailableSlots(args.start_date, endDate);
@@ -281,7 +223,7 @@ async function executeTool(toolCall, contactId) {
       }
 
       case "appointmentBooking": {
-        const title = `${args.customer_name || "Customer"} x Breys - ${args.service}`;
+        const title = `${args.customer_name || "Lead"} x ScalePlus - ${args.service}`;
         const result = await bookAppointment(contactId, args.date_time, title);
         return JSON.stringify({ success: true, appointmentId: result.id || result.appointmentId, ...result });
       }
@@ -337,58 +279,73 @@ function getManilaDateContext() {
   return `\n\nCURRENT DATE/TIME (Manila, UTC+8): ${dateStr}, ${timeStr}\nUpcoming days:\n${days.join("\n")}`;
 }
 
+// Build the system instructions: brain.md (persona + knowledge + playbooks) + fresh date context.
+function buildInstructions(override) {
+  const base = override != null ? override : getBrain();
+  return base + getManilaDateContext();
+}
+
+// Normalize Responses API usage to the { prompt_tokens, completion_tokens, total_tokens } shape.
+function normalizeUsage(usage) {
+  if (!usage) return undefined;
+  return {
+    prompt_tokens: usage.input_tokens,
+    completion_tokens: usage.output_tokens,
+    total_tokens: usage.total_tokens,
+  };
+}
+
+// Production chat — used by the GHL webhook. Uses the OpenAI Responses API.
 async function chat(contactId, message) {
-  const [instructions, history] = await Promise.all([
-    getSystemPrompt(),
-    getHistory(contactId, 20),
-  ]);
+  const history = await getHistory(contactId, 20);
+  const instructions = buildInstructions();
+  const model = getModel();
+  const toolDefs = responsesTools(tools);
 
-  // Inject fresh Manila date context into every request
-  const systemContent = instructions + getManilaDateContext();
+  // Responses API input: prior turns + the new user message
+  const input = [...history, { role: "user", content: message }];
 
-  const messages = [
-    { role: "system", content: systemContent },
-    ...history,
-    { role: "user", content: message },
-  ];
-
-  let response = await getClient().chat.completions.create({
-    model: process.env.OPENAI_MODEL || "gpt-4o-mini",
-    messages,
-    tools,
-    max_tokens: 1000,
+  let response = await getClient().responses.create({
+    model,
+    instructions,
+    input,
+    tools: toolDefs,
+    max_output_tokens: 1000,
+    store: false,
   });
-
-  let choice = response.choices[0];
 
   // Handle tool calls (up to 5 rounds for multi-step flows)
   let rounds = 0;
-  while (choice.finish_reason === "tool_calls" && rounds < 5) {
+  while (rounds < 5) {
+    const calls = (response.output || []).filter((o) => o.type === "function_call");
+    if (!calls.length) break;
     rounds++;
-    const toolCalls = choice.message.tool_calls;
-    messages.push(choice.message);
 
-    for (const tc of toolCalls) {
-      console.log(`Tool: ${tc.function.name}(${tc.function.arguments})`);
-      const result = await executeTool(tc, contactId);
+    // Echo the model's output (including the function_call items) back into the input
+    input.push(...response.output);
+
+    for (const call of calls) {
+      console.log(`Tool: ${call.name}(${call.arguments})`);
+      const result = await runTool(call.name, call.arguments, contactId);
       console.log(`Result: ${result.slice(0, 200)}`);
-      messages.push({
-        role: "tool",
-        tool_call_id: tc.id,
-        content: result,
+      input.push({
+        type: "function_call_output",
+        call_id: call.call_id,
+        output: result,
       });
     }
 
-    response = await getClient().chat.completions.create({
-      model: process.env.OPENAI_MODEL || "gpt-4o-mini",
-      messages,
-      tools,
-      max_tokens: 1000,
+    response = await getClient().responses.create({
+      model,
+      instructions,
+      input,
+      tools: toolDefs,
+      max_output_tokens: 1000,
+      store: false,
     });
-    choice = response.choices[0];
   }
 
-  const reply = choice.message?.content;
+  const reply = response.output_text;
   if (!reply) throw new Error("No reply from OpenAI");
 
   await Promise.all([
@@ -399,8 +356,8 @@ async function chat(contactId, message) {
   return reply;
 }
 
-// Playground chat — accepts overrides for temperature, top_p, max_tokens, model
-// Returns { reply, toolCalls } where toolCalls is the full trace
+// Playground chat — accepts overrides for temperature, top_p, max_tokens, model,
+// systemPromptOverride, and enabledTools. Returns { reply, toolCalls, model, usage }.
 async function playgroundChat(contactId, message, opts = {}) {
   const {
     temperature,
@@ -411,66 +368,62 @@ async function playgroundChat(contactId, message, opts = {}) {
     enabledTools,
   } = opts;
 
-  const [instructions, history] = await Promise.all([
-    getSystemPrompt(),
-    getHistory(contactId, 20),
-  ]);
-
-  const systemContent = (systemPromptOverride || instructions) + getManilaDateContext();
-
-  const messages = [
-    { role: "system", content: systemContent },
-    ...history,
-    { role: "user", content: message },
-  ];
+  const history = await getHistory(contactId, 20);
+  const instructions = buildInstructions(systemPromptOverride ?? null);
+  const activeModel = model || getModel();
 
   // Filter tools if enabledTools is specified
   const activeTools = enabledTools
     ? tools.filter((t) => enabledTools.includes(t.function.name))
     : tools;
+  const toolDefs = responsesTools(activeTools);
+
+  const input = [...history, { role: "user", content: message }];
 
   const params = {
-    model: model || process.env.OPENAI_MODEL || "gpt-4o-mini",
-    messages,
-    tools: activeTools.length ? activeTools : undefined,
-    max_tokens,
+    model: activeModel,
+    instructions,
+    input,
+    tools: toolDefs.length ? toolDefs : undefined,
+    max_output_tokens: max_tokens,
+    store: false,
   };
   if (temperature !== undefined) params.temperature = temperature;
   if (top_p !== undefined) params.top_p = top_p;
 
-  let response = await getClient().chat.completions.create(params);
-  let choice = response.choices[0];
+  let response = await getClient().responses.create(params);
 
   const toolTrace = [];
   let rounds = 0;
 
-  while (choice.finish_reason === "tool_calls" && rounds < 5) {
+  while (rounds < 5) {
+    const calls = (response.output || []).filter((o) => o.type === "function_call");
+    if (!calls.length) break;
     rounds++;
-    const toolCalls = choice.message.tool_calls;
-    messages.push(choice.message);
 
-    for (const tc of toolCalls) {
-      console.log(`Tool: ${tc.function.name}(${tc.function.arguments})`);
-      const result = await executeTool(tc, contactId);
+    input.push(...response.output);
+
+    for (const call of calls) {
+      console.log(`Tool: ${call.name}(${call.arguments})`);
+      const result = await runTool(call.name, call.arguments, contactId);
       console.log(`Result: ${result.slice(0, 200)}`);
       toolTrace.push({
-        name: tc.function.name,
-        arguments: JSON.parse(tc.function.arguments || "{}"),
+        name: call.name,
+        arguments: JSON.parse(call.arguments || "{}"),
         result: JSON.parse(result),
       });
-      messages.push({
-        role: "tool",
-        tool_call_id: tc.id,
-        content: result,
+      input.push({
+        type: "function_call_output",
+        call_id: call.call_id,
+        output: result,
       });
     }
 
-    params.messages = messages;
-    response = await getClient().chat.completions.create(params);
-    choice = response.choices[0];
+    params.input = input;
+    response = await getClient().responses.create(params);
   }
 
-  const reply = choice.message?.content;
+  const reply = response.output_text;
   if (!reply) throw new Error("No reply from OpenAI");
 
   await Promise.all([
@@ -481,19 +434,19 @@ async function playgroundChat(contactId, message, opts = {}) {
   return {
     reply,
     toolCalls: toolTrace,
-    model: params.model,
-    usage: response.usage,
+    model: activeModel,
+    usage: normalizeUsage(response.usage),
   };
 }
 
 module.exports = {
   chat,
   playgroundChat,
-  getSystemPrompt,
   getClient,
   setApiKey,
-  setAssistantId,
+  getModel,
+  setModel,
   tools,
-  executeTool,
+  runTool,
   getManilaDateContext,
 };
