@@ -12,6 +12,26 @@ function headers() {
   };
 }
 
+// Strip markdown so messages render as plain text on FB/IG/SMS/WhatsApp (which show **, #,
+// backticks, and [](links) as literal characters).
+function stripMarkdown(text) {
+  if (!text) return text;
+  let t = String(text);
+  t = t.replace(/!\[[^\]]*\]\((https?:\/\/[^\s)]+)\)/g, "$1"); // images -> url
+  t = t.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, "$1: $2"); // [text](url) -> text: url
+  t = t.replace(/```[a-z]*\n?/gi, "").replace(/```/g, ""); // code fences
+  t = t.replace(/`([^`]+)`/g, "$1"); // inline code
+  t = t.replace(/^\s{0,3}#{1,6}\s+/gm, ""); // headings
+  t = t.replace(/^\s{0,3}>\s?/gm, ""); // blockquotes
+  t = t.replace(/^\s*[-*+]\s+/gm, "• "); // list bullets -> •
+  t = t.replace(/\*\*([^*]+)\*\*/g, "$1"); // **bold**
+  t = t.replace(/__([^_]+)__/g, "$1"); // __bold__
+  t = t.replace(/\*([^*\n]+)\*/g, "$1"); // *italic*
+  t = t.replace(/(^|[\s(])_([^_\n]+)_([\s).,!?]|$)/g, "$1$2$3"); // _italic_
+  t = t.replace(/\*\*/g, "").replace(/(^|\s)#{1,6}(\s|$)/g, "$1$2"); // stray markers
+  return t.replace(/[ \t]+\n/g, "\n").trim();
+}
+
 async function sendReply(contactId, message, locationId) {
   // Use cached type or default (FB for this account)
   const type = channelCache.get(contactId) || DEFAULT_TYPE;
@@ -23,7 +43,7 @@ async function sendReply(contactId, message, locationId) {
     body: JSON.stringify({
       type,
       contactId,
-      message,
+      message: stripMarkdown(message),
     }),
   });
 
@@ -73,7 +93,7 @@ async function sendReplyHuman(contactId, message, locationId) {
   if (!SPLIT_CHANNELS.has(type)) {
     return sendReply(contactId, message, locationId);
   }
-  const bubbles = splitIntoBubbles(message);
+  const bubbles = splitIntoBubbles(stripMarkdown(message));
   let last;
   for (let i = 0; i < bubbles.length; i++) {
     if (i > 0) {
@@ -170,4 +190,4 @@ function setChannelType(contactId, ghlMessageType) {
   }
 }
 
-module.exports = { sendReply, sendReplyHuman, sendTypingIndicator, sendQuickAck, shouldAck, setChannelType, splitIntoBubbles };
+module.exports = { sendReply, sendReplyHuman, sendTypingIndicator, sendQuickAck, shouldAck, setChannelType, splitIntoBubbles, stripMarkdown };
