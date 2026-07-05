@@ -1,6 +1,6 @@
 const express = require("express");
 const { chat } = require("../services/openai");
-const { sendReply, setChannelType } = require("../services/ghl");
+const { sendReply, sendReplyHuman, sendTypingIndicator, setChannelType } = require("../services/ghl");
 
 const router = express.Router();
 
@@ -71,11 +71,14 @@ router.post("/inbound", async (req, res) => {
     res.json({ success: true, contactId, status: "processing" });
 
     // --- PROCESS ASYNC (after response sent) ---
+    // Show the typing animation while the AI composes (Live Chat channel only; no-op elsewhere)
+    sendTypingIndicator(contactId, locationId);
+
     const reply = await chat(contactId, message);
     console.log(`AI reply for contact ${contactId}: ${reply}`);
 
     if (process.env.GHL_API_KEY) {
-      await sendReply(contactId, reply, locationId);
+      await sendReplyHuman(contactId, reply, locationId);
       console.log(`Reply sent back to GHL for contact ${contactId}`);
     }
   } catch (error) {
