@@ -82,6 +82,34 @@ async function getAvailableSlots(startDate, endDate) {
   return result;
 }
 
+// Validate that an exact time is a real, currently-open slot (uses the FULL uncapped slot list
+// for the slot's date). Returns { available, options } — options is the full list of open
+// display times for that day, so the caller can re-offer real times if the pick is invalid.
+async function isSlotAvailable(isoDateTime) {
+  try {
+    const date = String(isoDateTime).slice(0, 10); // YYYY-MM-DD (iso carries +08:00)
+    const start = dateToTimestamp(date);
+    const endPlusOne = start + 86400000;
+    const url = `${GHL_API_BASE}/calendars/${CALENDAR_ID}/free-slots?startDate=${start}&endDate=${endPlusOne}&timezone=${TIMEZONE}`;
+    const response = await fetch(url, { headers: headers() });
+    if (!response.ok) return { available: false, options: [], error: await response.text() };
+    const data = await response.json();
+    const slots = [];
+    for (const [d, info] of Object.entries(data)) {
+      if (d === "traceId") continue;
+      (info.slots || []).forEach((s) => slots.push(s));
+    }
+    const target = new Date(isoDateTime).getTime();
+    const available = slots.some((s) => new Date(s).getTime() === target);
+    const options = slots.map((s) =>
+      new Date(s).toLocaleTimeString("en-PH", { hour: "numeric", minute: "2-digit", hour12: true, timeZone: TIMEZONE })
+    );
+    return { available, options };
+  } catch (err) {
+    return { available: false, options: [], error: err.message };
+  }
+}
+
 // Book an appointment
 async function bookAppointment(contactId, slotDateTime, title, notes) {
   // Keep the timezone offset if provided, otherwise assume Manila
@@ -234,6 +262,7 @@ async function getLocationCalendars() {
 
 module.exports = {
   getAvailableSlots,
+  isSlotAvailable,
   bookAppointment,
   getContactAppointments,
   rescheduleAppointment,

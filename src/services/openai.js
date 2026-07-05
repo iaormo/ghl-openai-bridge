@@ -2,6 +2,7 @@ const OpenAI = require("openai");
 const { getHistory, saveMessage } = require("../db");
 const {
   getAvailableSlots,
+  isSlotAvailable,
   bookAppointment,
   getContactAppointments,
   rescheduleAppointment,
@@ -248,6 +249,18 @@ async function runTool(name, argsString, contactId) {
           });
         } catch (err) {
           console.warn("Pre-booking contact sync failed (continuing):", err.message);
+        }
+
+        // CODE-ENFORCED slot validation: the model cannot book (or confirm) a time that isn't
+        // an actual open slot. If the pick is invalid, refuse and hand back the REAL open times.
+        const check = await isSlotAvailable(args.date_time);
+        if (!check.available) {
+          const opts = check.options && check.options.length
+            ? `The actual open times on that day are: ${check.options.join(", ")}. Offer the lead one of THESE (never a made-up time), get their pick, then book that exact slot.`
+            : `There are no open slots that day — check another day with getAvailableSlots.`;
+          return JSON.stringify({
+            error: `SLOT_NOT_AVAILABLE: ${args.date_time} is NOT an open slot. Do NOT tell the lead it's booked. ${opts}`,
+          });
         }
 
         const name = args.customer_name || (contact && contact.fullName) || "Lead";

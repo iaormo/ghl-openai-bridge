@@ -116,17 +116,12 @@ async function sendQuickAck(contactId, locationId) {
 function shouldAck(message) {
   if (!message) return false;
   const m = message.trim();
-  if (m.length < 6) return false; // "hi", "ok", "yes"
-  // Skip short greetings / acknowledgments that aren't questions
-  if (!/\?/.test(m) && m.length < 22 &&
-      /^(hi|hey|hello|ok|okay|yes|no|yup|sure|thanks|thank you|ty|great|cool|nice|got it|sounds good|perfect|k)\b/i.test(m)) {
-    return false;
-  }
-  return (
-    /\?/.test(m) ||
-    m.length > 40 ||
-    /\b(how|what|why|when|where|can you|do you|does|could|would|help|need|looking|price|cost|book|quote|integrat|automat|tell me|explain)\b/i.test(m)
-  );
+  // Ack EVERYTHING except clear greetings / acknowledgments / confirmations. This includes
+  // short/informal messages like "hm", "?", "how much", "info", "magkano" — they deserve a
+  // beat too, and the bot may need a moment to interpret or clarify them.
+  const trivial = /^(hi+|hey+|hello+|yo|ok|okay|k+|kk|yes|yep|yup|yeah|no|nope|sure|thanks|thank you|ty|thx|salamat|great|cool|nice|got it|sounds good|perfect|alright|okay lang|sige)[\s.!]*$/i;
+  if (trivial.test(m)) return false;
+  return true;
 }
 
 // ---- Live Chat typing indicator (GHL only supports this for the Live Chat channel) ----
