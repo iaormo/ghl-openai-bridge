@@ -58,9 +58,12 @@ async function getContactInfo(contactId) {
   const fieldDefs = await getFieldDefinitions();
   const resolvedFields = rawFields.map((f) => {
     const def = fieldDefs[f.id];
+    // GHL fieldKeys are prefixed like "contact.business_name"; strip it so the bot's
+    // bare keys ("business_name") match on read and write.
+    const rawKey = def ? def.key : f.id;
     return {
       id: f.id,
-      key: def ? def.key : f.id,
+      key: rawKey.replace(/^contact\./, ""),
       name: def ? def.name : f.id,
       value: f.value,
     };
@@ -112,18 +115,27 @@ async function updateContactInfo(contactId, { firstName, lastName, phone, email,
 
 // Update a custom field on a contact
 async function updateCustomField(contactId, key, value) {
-  // First, get existing custom fields to find the field ID
-  const contact = await getContactInfo(contactId);
-  const existingFields = contact.customFields || [];
+  const normalize = (k) => String(k || "").replace(/^contact\./, "");
+  const wantKey = normalize(key);
 
-  // Try to find the field by key name
-  const existing = existingFields.find(
-    (f) => f.key === key || f.fieldKey === key || f.id === key
-  );
+  // Resolve the key to a location custom-field ID so we always write by ID (most reliable).
+  // GHL fieldKeys are prefixed "contact.<key>"; match on the normalized form.
+  let fieldId = null;
+  try {
+    const defs = await getFieldDefinitions(); // { id: { key, name, dataType } }
+    for (const [id, def] of Object.entries(defs)) {
+      if (normalize(def.key) === wantKey || normalize(def.name).replace(/\s+/g, "_").toLowerCase() === wantKey) {
+        fieldId = id;
+        break;
+      }
+    }
+  } catch (_) {
+    // fall through to key-based write
+  }
 
-  const customFields = existing
-    ? [{ id: existing.id, value }]
-    : [{ key, field_value: value }];
+  const customFields = fieldId
+    ? [{ id: fieldId, value }]
+    : [{ key: `contact.${wantKey}`, field_value: value }];
 
   const response = await fetch(
     `${GHL_API_BASE}/contacts/${contactId}`,
