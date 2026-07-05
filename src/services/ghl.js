@@ -85,6 +85,50 @@ async function sendReplyHuman(contactId, message, locationId) {
   return last;
 }
 
+// ---- Quick acknowledgment ("one sec") to mimic a human seeing the message + typing ----
+
+const ACK_LINES = [
+  "ooh good question — one sec 👀",
+  "one sec, lemme check for you 😊",
+  "on it — gimme a moment 🙌",
+  "great q, let me pull that up 🤔",
+  "sec, checking that for you 👇",
+  "ohh let me sort that real quick",
+  "gotcha — one moment 😊",
+  "let me grab that for you, sec",
+];
+
+// Send a short human-style ack immediately, chat channels only. Best-effort, never throws.
+// Not saved to conversation history — it's pure UX, invisible to the AI.
+async function sendQuickAck(contactId, locationId) {
+  const type = channelCache.get(contactId) || DEFAULT_TYPE;
+  if (!SPLIT_CHANNELS.has(type)) return; // FB/IG/WhatsApp/Live Chat only — never SMS/Email
+  const line = ACK_LINES[Math.floor(Math.random() * ACK_LINES.length)];
+  try {
+    await sendReply(contactId, line, locationId);
+  } catch (err) {
+    console.warn("Quick ack failed (non-fatal):", err.message);
+  }
+}
+
+// Decide if a message is "substantial" enough to warrant an ack (skip greetings / one-word
+// replies so it never feels spammy).
+function shouldAck(message) {
+  if (!message) return false;
+  const m = message.trim();
+  if (m.length < 6) return false; // "hi", "ok", "yes"
+  // Skip short greetings / acknowledgments that aren't questions
+  if (!/\?/.test(m) && m.length < 22 &&
+      /^(hi|hey|hello|ok|okay|yes|no|yup|sure|thanks|thank you|ty|great|cool|nice|got it|sounds good|perfect|k)\b/i.test(m)) {
+    return false;
+  }
+  return (
+    /\?/.test(m) ||
+    m.length > 40 ||
+    /\b(how|what|why|when|where|can you|do you|does|could|would|help|need|looking|price|cost|book|quote|integrat|automat|tell me|explain)\b/i.test(m)
+  );
+}
+
 // ---- Live Chat typing indicator (GHL only supports this for the Live Chat channel) ----
 
 // Best-effort: show the "agent is typing" animation while the AI composes. Fire-and-forget;
@@ -131,4 +175,4 @@ function setChannelType(contactId, ghlMessageType) {
   }
 }
 
-module.exports = { sendReply, sendReplyHuman, sendTypingIndicator, setChannelType, splitIntoBubbles };
+module.exports = { sendReply, sendReplyHuman, sendTypingIndicator, sendQuickAck, shouldAck, setChannelType, splitIntoBubbles };

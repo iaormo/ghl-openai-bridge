@@ -1,6 +1,6 @@
 const express = require("express");
 const { chat } = require("../services/openai");
-const { sendReply, sendReplyHuman, sendTypingIndicator, setChannelType } = require("../services/ghl");
+const { sendReply, sendReplyHuman, sendTypingIndicator, sendQuickAck, shouldAck, setChannelType } = require("../services/ghl");
 
 const router = express.Router();
 
@@ -71,13 +71,21 @@ router.post("/inbound", async (req, res) => {
     res.json({ success: true, contactId, status: "processing" });
 
     // --- PROCESS ASYNC (after response sent) ---
-    // Show the typing animation while the AI composes (Live Chat channel only; no-op elsewhere)
+    // Make the bot feel alive while the AI composes:
+    //  - Live Chat: native typing animation (no-op on other channels)
+    //  - FB/IG/WhatsApp: a quick "one sec" ack fired in PARALLEL with the AI so it lands first
+    //    without adding any latency to the real reply. Only for substantial messages.
     sendTypingIndicator(contactId, locationId);
+    const ackPromise =
+      process.env.GHL_API_KEY && shouldAck(message)
+        ? sendQuickAck(contactId, locationId)
+        : Promise.resolve();
 
     const reply = await chat(contactId, message);
     console.log(`AI reply for contact ${contactId}: ${reply}`);
 
     if (process.env.GHL_API_KEY) {
+      await ackPromise; // ensure the "one sec" landed before the real reply
       await sendReplyHuman(contactId, reply, locationId);
       console.log(`Reply sent back to GHL for contact ${contactId}`);
     }
