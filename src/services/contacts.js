@@ -178,6 +178,26 @@ async function createLocationCustomField(name, dataType = "TEXT") {
   return data.customField || data;
 }
 
+// Create a note on a contact (used to log booking reason + chat details)
+async function createContactNote(contactId, body) {
+  const response = await fetch(
+    `${GHL_API_BASE}/contacts/${contactId}/notes`,
+    {
+      method: "POST",
+      headers: headers("2021-07-28"),
+      body: JSON.stringify({ body }),
+    }
+  );
+
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`Failed to create note: ${err}`);
+  }
+
+  const data = await response.json();
+  return data.note || data;
+}
+
 // List all custom fields in the GHL location
 async function getLocationCustomFields() {
   const response = await fetch(
@@ -194,4 +214,4 @@ async function getLocationCustomFields() {
   return data.customFields || [];
 }
 
-module.exports = { getContactInfo, updateContactInfo, updateCustomField, createLocationCustomField, getLocationCustomFields };
+module.exports = { getContactInfo, updateContactInfo, updateCustomField, createContactNote, createLocationCustomField, getLocationCustomFields };

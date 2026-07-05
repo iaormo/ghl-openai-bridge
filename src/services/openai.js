@@ -12,6 +12,7 @@ const {
   getContactInfo,
   updateContactInfo,
   updateCustomField,
+  createContactNote,
 } = require("./contacts");
 const { getBrain } = require("./brain");
 
@@ -119,16 +120,18 @@ Call this whenever the lead shares qualification info (business details, pain po
     type: "function",
     function: {
       name: "appointmentBooking",
-      description: "Book the FREE AUTOMATION AUDIT call (aka discovery/strategy call) for the lead. ONLY use this for the automation audit call — never for CRM signups (send CRM-interested leads to scaleplus.io/crm instead) or any other purpose. Requires their name, the topic, and a confirmed date/time. Only call AFTER the lead has picked a specific slot you offered, and pass the exact `iso` value from getAvailableSlots as date_time.",
+      description: "Book the FREE AUTOMATION AUDIT call (aka discovery/strategy call) for the lead. ONLY use this for the automation audit call — never for CRM signups (send CRM-interested leads to scaleplus.io/crm instead) or any other purpose. HARD REQUIREMENT: you must have the lead's name, PHONE, and EMAIL before calling this — the booking will be REFUSED without email and phone (they're needed for confirmations and reminders). Only call AFTER the lead has picked a specific slot you offered, and pass the exact `iso` value from getAvailableSlots as date_time.",
       parameters: {
         type: "object",
         properties: {
           date_time: { type: "string", description: "The exact `iso` value of the chosen slot from getAvailableSlots (e.g. 2026-03-08T14:00:00+08:00). Must be a real available slot." },
-          service: { type: "string", description: "The topic of the audit call (e.g. 'Automation Audit — after-hours FB inquiries for dental clinic')" },
+          service: { type: "string", description: "The topic/reason of the audit call (e.g. 'Automation Audit — after-hours FB inquiries for dental clinic')" },
           customer_name: { type: "string", description: "Lead's name for the appointment title" },
-          phone: { type: "string", description: "Lead's phone number" },
+          phone: { type: "string", description: "Lead's phone number (REQUIRED — ask for it before booking)" },
+          email: { type: "string", description: "Lead's email address (REQUIRED — ask for it before booking; used for the confirmation)" },
+          booking_notes: { type: "string", description: "REQUIRED: the reason for the booking plus a brief summary of everything relevant from this chat — their business, industry, team size, current tools, pain points, and what they want. This is saved to the CRM for the team running the call." },
         },
-        required: ["date_time", "service"],
+        required: ["date_time", "service", "customer_name", "phone", "email", "booking_notes"],
       },
     },
   },
@@ -223,9 +226,62 @@ async function runTool(name, argsString, contactId) {
       }
 
       case "appointmentBooking": {
-        const title = `${args.customer_name || "Lead"} x ScalePlus - ${args.service}`;
-        const result = await bookAppointment(contactId, args.date_time, title);
-        return JSON.stringify({ success: true, appointmentId: result.id || result.appointmentId, ...result });
+        // HARD REQUIREMENT: email + phone must be known (from args or the contact record)
+        // before any booking goes through.
+        let contact = null;
+        try { contact = await getContactInfo(contactId); } catch (_) {}
+        const email = args.email || (contact && contact.email) || "";
+        const phone = args.phone || (contact && contact.phone) || "";
+        if (!email || !phone) {
+          const missing = [!email && "email", !phone && "phone number"].filter(Boolean).join(" and ");
+          return JSON.stringify({
+            error: `BOOKING_REFUSED: missing the lead's ${missing}. Ask for it naturally (it's needed for the confirmation and reminders), then call appointmentBooking again. NEVER book without email and phone.`,
+          });
+        }
+
+        // Sync the details onto the contact record so GHL confirmations/reminders work
+        try {
+          await updateContactInfo(contactId, {
+            name: args.customer_name,
+            phone: args.phone,
+            email: args.email,
+          });
+        } catch (err) {
+          console.warn("Pre-booking contact sync failed (continuing):", err.message);
+        }
+
+        const name = args.customer_name || (contact && contact.fullName) || "Lead";
+        const title = `${name} x ScalePlus - ${args.service}`;
+        const notes = args.booking_notes || args.service;
+        const result = await bookAppointment(contactId, args.date_time, title, notes);
+
+        // Log the reason + chat details as a contact note in GHL (best-effort)
+        try {
+          await createContactNote(
+            contactId,
+            `📅 AUTOMATION AUDIT BOOKED\nWhen: ${args.date_time}\nTopic: ${args.service}\nName: ${name} | Email: ${email} | Phone: ${phone}\n\nDetails from chat:\n${notes}`
+          );
+        } catch (err) {
+          console.warn("Booking note creation failed (non-fatal):", err.message);
+        }
+
+        // Human-readable booked time so the model confirms the EXACT slot (no date drift)
+        const bookedFor = new Date(args.date_time).toLocaleString("en-PH", {
+          timeZone: TIMEZONE,
+          weekday: "long",
+          year: "numeric",
+          month: "long",
+          day: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+          hour12: true,
+        });
+        return JSON.stringify({
+          success: true,
+          appointmentId: result.id || result.appointmentId,
+          booked_for: `${bookedFor} (Philippine Time) — confirm THIS exact date/time to the lead`,
+          ...result,
+        });
       }
 
       case "getContactAppointments": {

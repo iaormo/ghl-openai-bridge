@@ -83,25 +83,28 @@ async function getAvailableSlots(startDate, endDate) {
 }
 
 // Book an appointment
-async function bookAppointment(contactId, slotDateTime, title) {
+async function bookAppointment(contactId, slotDateTime, title, notes) {
   // Keep the timezone offset if provided, otherwise assume Manila
   const startTime = slotDateTime.includes("+") || slotDateTime.includes("Z")
     ? slotDateTime
     : slotDateTime + "+08:00";
+
+  const body = {
+    calendarId: CALENDAR_ID,
+    locationId: LOCATION_ID,
+    contactId,
+    startTime,
+    title: title || "Appointment",
+    appointmentStatus: "new",
+  };
+  if (notes) body.notes = notes;
 
   const response = await fetch(
     `${GHL_API_BASE}/calendars/events/appointments`,
     {
       method: "POST",
       headers: headers(),
-      body: JSON.stringify({
-        calendarId: CALENDAR_ID,
-        locationId: LOCATION_ID,
-        contactId,
-        startTime,
-        title: title || "Appointment",
-        appointmentStatus: "new",
-      }),
+      body: JSON.stringify(body),
     }
   );
 
