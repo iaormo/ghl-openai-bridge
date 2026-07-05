@@ -1,6 +1,6 @@
 const express = require("express");
 const { chat } = require("../services/openai");
-const { sendReply, sendReplyHuman, sendTypingIndicator, setChannelType, setEmailMeta, getChannelType } = require("../services/ghl");
+const { sendReply, sendReplyHuman, sendTypingIndicator, setChannelType, setChannel, detectChannel, setEmailMeta, getChannelType } = require("../services/ghl");
 
 const router = express.Router();
 
@@ -61,12 +61,20 @@ router.post("/inbound", async (req, res) => {
       });
     }
 
-    // Cache the channel type from the GHL payload (type 11 = FB, 3 = Email, etc.)
-    const msgType = body.message?.type;
-    if (msgType) setChannelType(contactId, msgType);
+    // Detect the reply channel: explicit customData.channel wins, else the workflow name
+    // (workflows are named per channel), else numeric message type. Falls back to default.
+    const detected = detectChannel(body);
+    if (detected) {
+      setChannel(contactId, detected);
+    } else if (body.message?.type) {
+      setChannelType(contactId, body.message.type);
+    }
 
     // For email, capture subject + thread info so the reply threads and has a subject line
     const channel = getChannelType(contactId);
+    console.log(
+      `Channel: ${detected || "(none→" + channel + ")"} | workflow: ${body.workflow?.name || "-"} | contact ${contactId}`
+    );
     if (channel === "Email") {
       setEmailMeta(contactId, {
         subject: body.subject || body.message?.subject || body.email?.subject,

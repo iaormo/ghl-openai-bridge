@@ -201,7 +201,14 @@ async function sendTypingIndicator(contactId, locationId) {
   }
 }
 
-// Allow setting channel type from webhook payload
+const VALID_CHANNELS = new Set(["FB", "IG", "SMS", "Email", "WhatsApp", "Live_Chat", "GMB"]);
+
+// Set the reply channel for a contact directly (validated string).
+function setChannel(contactId, channel) {
+  if (contactId && VALID_CHANNELS.has(channel)) channelCache.set(contactId, channel);
+}
+
+// Allow setting channel type from a numeric GHL message type
 function setChannelType(contactId, ghlMessageType) {
   const typeMap = {
     11: "FB",           // TYPE_FACEBOOK
@@ -216,4 +223,42 @@ function setChannelType(contactId, ghlMessageType) {
   }
 }
 
-module.exports = { sendReply, sendReplyHuman, sendTypingIndicator, sendQuickAck, shouldAck, setChannelType, setEmailMeta, getChannelType, splitIntoBubbles, stripMarkdown };
+// Best-effort channel detection from a GHL webhook payload. An explicit `channel` field
+// (set as custom data in the GHL workflow's webhook action) is the most reliable signal.
+function channelFromText(s) {
+  const t = String(s || "").toLowerCase();
+  if (!t) return null;
+  if (/\bemail\b|e-?mail/.test(t)) return "Email";
+  if (/whats\s?app/.test(t)) return "WhatsApp";
+  if (/instagram|\big\b/.test(t)) return "IG";
+  if (/\bsms\b|\btext\b/.test(t)) return "SMS";
+  if (/live\s?chat|web\s?chat/.test(t)) return "Live_Chat";
+  if (/\bgmb\b|google/.test(t)) return "GMB";
+  if (/facebook|messenger|\bfb\b/.test(t)) return "FB";
+  return null;
+}
+
+function detectChannel(body) {
+  if (!body) return null;
+  const strMap = {
+    email: "Email", fb: "FB", facebook: "FB", messenger: "FB", ig: "IG", instagram: "IG",
+    sms: "SMS", text: "SMS", whatsapp: "WhatsApp", wa: "WhatsApp",
+    live_chat: "Live_Chat", livechat: "Live_Chat", webchat: "Live_Chat", chat: "Live_Chat", gmb: "GMB",
+  };
+  // 1) explicit `channel` custom data — GHL nests custom webhook data under customData
+  const explicit = String(
+    body.customData?.channel || body.customData?.Channel || body.channel || body.Channel || body.reply_channel || ""
+  ).toLowerCase().trim();
+  if (strMap[explicit]) return strMap[explicit];
+  // 2) numeric message type (raw inbound webhook format)
+  const numMap = { 11: "FB", 2: "SMS", 3: "Email", 15: "IG", 18: "WhatsApp", 6: "Live_Chat" };
+  const numT = body.message?.type ?? body.messageType ?? body.message_type;
+  if (numT != null && numMap[numT]) return numMap[numT];
+  // 3) the workflow NAME (workflows are named by channel, e.g. "010.A Email Bot Trigger")
+  const fromWf = channelFromText(body.workflow?.name);
+  if (fromWf) return fromWf;
+  // 4) any string message-type field
+  return channelFromText(body.message?.type || body.lastMessageType || body.last_message_type || body.type);
+}
+
+module.exports = { sendReply, sendReplyHuman, sendTypingIndicator, sendQuickAck, shouldAck, setChannelType, setChannel, detectChannel, setEmailMeta, getChannelType, splitIntoBubbles, stripMarkdown };
