@@ -579,7 +579,9 @@ async function composeOutreach(contactId, formContext = "") {
     "WHAT THEY SUBMITTED / NOTES ON FILE:\n" + notesText + "\n" +
     (formContext ? "\nFORM DETAILS:\n" + formContext + "\n" : "") +
     "\nThe email must:\n" +
-    "- Open warmly with their first name if known.\n" +
+    "- Open with EXACTLY this intro line: 'Hey <FirstName>! Ian James Ormo here, founder of ScalePlus.' " +
+    "(use their first name if known; if not, 'Hey there! Ian James Ormo here, founder of ScalePlus.') " +
+    "Then continue on the next lines.\n" +
     "- Show you actually read what they shared — reference a specific detail (their business, " +
     "goal, or need). Never generic.\n" +
     "- Ask 1-2 genuine questions to understand their situation.\n" +
