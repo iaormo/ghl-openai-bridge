@@ -56,4 +56,12 @@ async function saveMessage(contactId, role, content) {
   );
 }
 
-module.exports = { getPool, initDB, getHistory, saveMessage };
+// Delete all stored conversation history for a contact (reset the bot's memory of them).
+async function deleteHistory(contactId) {
+  const db = getPool();
+  if (!db) return { deleted: 0 };
+  const result = await db.query("DELETE FROM messages WHERE contact_id = $1", [contactId]);
+  return { deleted: result.rowCount };
+}
+
+module.exports = { getPool, initDB, getHistory, saveMessage, deleteHistory };

@@ -69,9 +69,9 @@ async function getAvailableSlots(startDate, endDate) {
         }),
       };
     });
-    // Offer only a handful of evenly-spread options (morning→evening) so the bot presents
-    // a few clean choices instead of dumping 30+ times. Full count kept for context.
-    const MAX = 6;
+    // Offer just 3 evenly-spread options (morning / midday / afternoon-evening) so the bot
+    // suggests a few clean choices instead of dumping 30+ times. Full count kept for context.
+    const MAX = 3;
     let picked = all;
     if (all.length > MAX) {
       const step = (all.length - 1) / (MAX - 1);

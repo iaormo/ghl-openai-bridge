@@ -14,6 +14,7 @@ const {
   updateContactInfo,
 } = require("../services/contacts");
 const { getLocationCalendars } = require("../services/calendar");
+const { deleteHistory } = require("../db");
 const { getBrain, reloadBrain, BRAIN_PATH } = require("../services/brain");
 const fs = require("fs");
 
@@ -74,6 +75,17 @@ router.post("/brain", (req, res) => {
 router.post("/brain/reload", (req, res) => {
   const brain = reloadBrain();
   res.json({ success: true, length: brain.length });
+});
+
+// DELETE /playground/history/:contactId — wipe the bot's stored conversation memory for a
+// contact (fresh start). Useful after test messages or to reset a thread.
+router.delete("/history/:contactId", async (req, res) => {
+  try {
+    const result = await deleteHistory(req.params.contactId);
+    res.json({ success: true, contactId: req.params.contactId, ...result });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // GET /playground/tools — list all tools (built-in + dynamic)
