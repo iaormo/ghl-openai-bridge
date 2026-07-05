@@ -1,6 +1,8 @@
 const express = require("express");
 const { chat, composeOutreach } = require("../services/openai");
 const { sendReply, sendReplyHuman, sendTypingIndicator, setChannelType, setChannel, detectChannel, setEmailMeta, getChannelType } = require("../services/ghl");
+const { sendSms, parseInboundSms } = require("../services/sms");
+const { upsertContactByPhone } = require("../services/contacts");
 
 const router = express.Router();
 
@@ -173,6 +175,40 @@ router.post("/form", async (req, res) => {
     }
   } catch (error) {
     console.error("Form outreach error:", error);
+    if (!res.headersSent) res.status(500).json({ error: error.message });
+  }
+});
+
+// --- SMS via Android gateway (Philippine number connected by webhook) ---
+router.post("/sms", async (req, res) => {
+  try {
+    const body = req.body;
+    console.log("INBOUND SMS RAW:", JSON.stringify(body).slice(0, 600));
+    const { from, text, messageId } = parseInboundSms(body);
+    if (!from || !text) {
+      return res.status(200).json({ skipped: true, reason: "no from/text in payload" });
+    }
+    if (isDuplicate(messageId || `${from}|${text}`)) {
+      return res.status(200).json({ skipped: true, reason: "duplicate" });
+    }
+
+    // Respond immediately so the gateway doesn't retry
+    res.json({ success: true, status: "processing" });
+
+    // Get a GHL contact for this phone (so booking/notes/memory work), then reply as SMS
+    let contactId;
+    try { contactId = await upsertContactByPhone(from); } catch (e) { console.error("SMS contact upsert failed:", e.message); }
+    if (!contactId) { console.warn("No contactId for SMS from", from); return; }
+
+    setChannel(contactId, "SMS");
+    console.log(`Incoming SMS from ${from} (contact ${contactId}): ${text}`);
+
+    const reply = await chat(contactId, text, "SMS");
+    console.log(`AI SMS reply for ${from}: ${reply}`);
+    await sendSms(from, reply);
+    console.log(`SMS reply sent to ${from}`);
+  } catch (error) {
+    console.error("SMS webhook error:", error);
     if (!res.headersSent) res.status(500).json({ error: error.message });
   }
 });

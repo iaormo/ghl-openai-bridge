@@ -198,6 +198,19 @@ async function createContactNote(contactId, body) {
   return data.note || data;
 }
 
+// Create or find a contact by phone number (for SMS via an external gateway) — returns the id
+// so booking/notes/memory all work for SMS conversations.
+async function upsertContactByPhone(phone) {
+  const response = await fetch(
+    `${GHL_API_BASE}/contacts/upsert`,
+    { method: "POST", headers: headers("2021-07-28"), body: JSON.stringify({ locationId: LOCATION_ID, phone }) }
+  );
+  if (!response.ok) throw new Error(`Failed to upsert contact by phone: ${await response.text()}`);
+  const data = await response.json();
+  const c = data.contact || data;
+  return c.id;
+}
+
 // Read a contact's notes (most recent first) — used to build outbound form follow-ups.
 async function getContactNotes(contactId) {
   const response = await fetch(
@@ -228,4 +241,4 @@ async function getLocationCustomFields() {
   return data.customFields || [];
 }
 
-module.exports = { getContactInfo, updateContactInfo, updateCustomField, createContactNote, getContactNotes, createLocationCustomField, getLocationCustomFields };
+module.exports = { getContactInfo, updateContactInfo, updateCustomField, createContactNote, getContactNotes, upsertContactByPhone, createLocationCustomField, getLocationCustomFields };

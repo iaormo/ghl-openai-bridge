@@ -495,6 +495,9 @@ function channelNote(channel) {
   if (channel === "Email") {
     return "\n\nCHANNEL: You are replying by EMAIL. Write it like a short, warm email — open with a greeting (use their first name if you know it), a few clear sentences, and a friendly sign-off on its own line: \"— Ian from ScalePlus\". You can be slightly more complete than a chat message, but stay concise. Plain text, no markdown.";
   }
+  if (channel === "SMS") {
+    return "\n\nCHANNEL: You are replying by SMS/text. Keep it VERY short — 1-2 sentences, since texts are length-limited and cost per segment. No markdown, no sign-off, and only include a link if it's essential.";
+  }
   return "\n\nCHANNEL: You are on live chat/messaging — keep it short and conversational, no email-style greeting or sign-off.";
 }
 
