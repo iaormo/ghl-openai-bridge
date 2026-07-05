@@ -493,7 +493,7 @@ function normalizeUsage(usage) {
 // Note appended to the prompt so replies fit the channel they're going to.
 function channelNote(channel) {
   if (channel === "Email") {
-    return "\n\nCHANNEL: You are replying by EMAIL. Write it like a short, warm email — open with a greeting (use their first name if you know it), a few clear sentences, and a friendly sign-off on its own line: \"— Skye, ScalePlus\". You can be slightly more complete than a chat message, but stay concise. Plain text, no markdown.";
+    return "\n\nCHANNEL: You are replying by EMAIL. Write it like a short, warm email — open with a greeting (use their first name if you know it), a few clear sentences, and a friendly sign-off on its own line: \"— Ian, ScalePlus\". You can be slightly more complete than a chat message, but stay concise. Plain text, no markdown.";
   }
   return "\n\nCHANNEL: You are on live chat/messaging — keep it short and conversational, no email-style greeting or sign-off.";
 }
@@ -584,7 +584,7 @@ async function composeOutreach(contactId, formContext = "") {
     "goal, or need). Never generic.\n" +
     "- Ask 1-2 genuine questions to understand their situation.\n" +
     "- End with a clear, low-pressure CTA to book the free automation audit call (offer to find a time).\n" +
-    "- Sound like a real person wrote it — short, warm, no markdown, sign off '— Skye, ScalePlus'.\n" +
+    "- Sound like a real person wrote it — short, warm, no markdown, sign off '— Ian, ScalePlus'.\n" +
     "FORMAT: first line exactly 'Subject: <short compelling subject>', then a blank line, then the email body.\n" +
     "Also, if the notes contain business details not yet saved as fields, save them with updateCustomField.";
 
