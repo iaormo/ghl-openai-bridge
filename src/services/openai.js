@@ -251,6 +251,32 @@ async function runTool(name, argsString, contactId) {
           console.warn("Pre-booking contact sync failed (continuing):", err.message);
         }
 
+        // DUPLICATE GUARD: if this contact already has an upcoming audit call, never create a
+        // second one — and never tell them a slot is "unavailable" when it's their OWN booking.
+        let existingAppts = [];
+        try { existingAppts = await getContactAppointments(contactId); } catch (_) {}
+        if (existingAppts.length) {
+          const target = new Date(args.date_time).getTime();
+          const same = existingAppts.find((a) => {
+            const raw = a.startTimeRaw || "";
+            const t = raw.includes("+") || raw.includes("Z") ? new Date(raw).getTime() : new Date(raw + "+08:00").getTime();
+            return Math.abs(t - target) < 60000;
+          });
+          if (same) {
+            return JSON.stringify({
+              already_booked: true,
+              appointmentId: same.id,
+              booked_for: `${same.date} ${same.time} (Philippine Time)`,
+              note: "This lead ALREADY has this exact call booked. Warmly confirm the existing booking — do NOT create a duplicate and do NOT say the slot is unavailable.",
+            });
+          }
+          return JSON.stringify({
+            has_existing_booking: true,
+            existing: existingAppts.map((a) => `${a.date} ${a.time} — "${a.title}" (id: ${a.id})`),
+            note: "This lead already has an upcoming audit call. Do NOT book another. If they want a different time, use rescheduleAppointment on the existing appointment; otherwise just confirm the existing one.",
+          });
+        }
+
         // CODE-ENFORCED slot validation: the model cannot book (or confirm) a time that isn't
         // an actual open slot. If the pick is invalid, refuse and hand back the REAL open times.
         const check = await isSlotAvailable(args.date_time);
