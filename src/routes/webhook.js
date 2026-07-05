@@ -1,6 +1,6 @@
 const express = require("express");
 const { chat } = require("../services/openai");
-const { sendReply, sendReplyHuman, sendTypingIndicator, setChannelType } = require("../services/ghl");
+const { sendReply, sendReplyHuman, sendTypingIndicator, setChannelType, setEmailMeta, getChannelType } = require("../services/ghl");
 
 const router = express.Router();
 
@@ -61,11 +61,22 @@ router.post("/inbound", async (req, res) => {
       });
     }
 
-    // Cache the channel type from the GHL payload (type 11 = FB, etc.)
+    // Cache the channel type from the GHL payload (type 11 = FB, 3 = Email, etc.)
     const msgType = body.message?.type;
     if (msgType) setChannelType(contactId, msgType);
 
-    console.log(`Incoming message from contact ${contactId}: ${message}`);
+    // For email, capture subject + thread info so the reply threads and has a subject line
+    const channel = getChannelType(contactId);
+    if (channel === "Email") {
+      setEmailMeta(contactId, {
+        subject: body.subject || body.message?.subject || body.email?.subject,
+        threadId: body.threadId || body.thread_id || body.conversationId || body.conversation_id,
+        messageId: body.messageId || body.message_id || body.message?.id,
+        emailFrom: body.emailFrom || body.email?.from || body.from,
+      });
+    }
+
+    console.log(`Incoming ${channel} message from contact ${contactId}: ${message}`);
 
     // Respond immediately so GHL doesn't timeout or retry
     res.json({ success: true, contactId, status: "processing" });
@@ -74,7 +85,7 @@ router.post("/inbound", async (req, res) => {
     // Live Chat native typing animation while the AI composes (no-op on other channels)
     sendTypingIndicator(contactId, locationId);
 
-    const reply = await chat(contactId, message);
+    const reply = await chat(contactId, message, channel);
     console.log(`AI reply for contact ${contactId}: ${reply}`);
 
     if (process.env.GHL_API_KEY) {

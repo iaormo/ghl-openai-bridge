@@ -105,6 +105,20 @@ Call this whenever the lead shares qualification info (business details, pain po
   {
     type: "function",
     function: {
+      name: "addContactNote",
+      description: "Log an important detail or context about the lead to their CRM record as a note. Call this whenever the lead shares something meaningful — their business, what they do, goals, needs, situation, or a decision — even casually (e.g. 'I have a potato business', 'we're opening a 2nd branch', 'main goal is more repeat customers'). Also save structured facts with updateCustomField. Keep the note short and factual. Don't let good context vanish into the chat.",
+      parameters: {
+        type: "object",
+        properties: {
+          note: { type: "string", description: "The concise detail/context to log on the contact's record" },
+        },
+        required: ["note"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "getAvailableSlots",
       description: "Check open times for the FREE AUTOMATION AUDIT call on a date. Returns { totalAvailable, options } per date — 'options' is a short curated list of {iso, display} times to offer. Present just 2-3 of them conversationally (e.g. morning vs afternoon); do NOT list them all. Only use this when booking the automation audit call.",
       parameters: {
@@ -218,6 +232,11 @@ async function runTool(name, argsString, contactId) {
       case "updateCustomField": {
         const result = await updateCustomField(contactId, args.key, args.value);
         return JSON.stringify(result);
+      }
+
+      case "addContactNote": {
+        await createContactNote(contactId, `📝 ${args.note}`);
+        return JSON.stringify({ success: true });
       }
 
       case "getAvailableSlots": {
@@ -470,13 +489,21 @@ function normalizeUsage(usage) {
   };
 }
 
+// Note appended to the prompt so replies fit the channel they're going to.
+function channelNote(channel) {
+  if (channel === "Email") {
+    return "\n\nCHANNEL: You are replying by EMAIL. Write it like a short, warm email — open with a greeting (use their first name if you know it), a few clear sentences, and a friendly sign-off on its own line: \"— Skye, ScalePlus\". You can be slightly more complete than a chat message, but stay concise. Plain text, no markdown.";
+  }
+  return "\n\nCHANNEL: You are on live chat/messaging — keep it short and conversational, no email-style greeting or sign-off.";
+}
+
 // Production chat — used by the GHL webhook. Uses the OpenAI Responses API.
-async function chat(contactId, message) {
+async function chat(contactId, message, channel = "chat") {
   const [history, contactContext] = await Promise.all([
     getHistory(contactId, 20),
     buildContactContext(contactId),
   ]);
-  const instructions = buildInstructions() + contactContext;
+  const instructions = buildInstructions() + contactContext + channelNote(channel);
   const model = getModel();
   const toolDefs = responsesTools(tools);
 

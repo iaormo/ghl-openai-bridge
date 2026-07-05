@@ -2,7 +2,23 @@ const GHL_API_BASE = "https://services.leadconnectorhq.com";
 
 // Cache channel type per contact so we only look it up once
 const channelCache = new Map();
+// Cache email thread metadata (subject / thread id) so email replies thread correctly
+const emailMeta = new Map();
 const DEFAULT_TYPE = process.env.GHL_DEFAULT_CHANNEL || "FB";
+
+function setEmailMeta(contactId, meta) {
+  if (!contactId || !meta) return;
+  const cur = emailMeta.get(contactId) || {};
+  const next = { ...cur };
+  for (const k of ["subject", "threadId", "messageId", "emailFrom", "emailTo"]) {
+    if (meta[k]) next[k] = meta[k];
+  }
+  emailMeta.set(contactId, next);
+}
+
+function getChannelType(contactId) {
+  return channelCache.get(contactId) || DEFAULT_TYPE;
+}
 
 function headers() {
   return {
@@ -37,14 +53,24 @@ async function sendReply(contactId, message, locationId) {
   const type = channelCache.get(contactId) || DEFAULT_TYPE;
   console.log(`Sending reply as type: ${type} to contact ${contactId}`);
 
+  const clean = stripMarkdown(message);
+  const payload = { type, contactId, message: clean };
+
+  // Email needs a subject (and threads better with subject/thread id + html body)
+  if (type === "Email") {
+    const meta = emailMeta.get(contactId) || {};
+    let subject = meta.subject || "Your message to ScalePlus";
+    if (!/^re:/i.test(subject.trim())) subject = `Re: ${subject}`;
+    payload.subject = subject;
+    payload.html = clean.replace(/\n/g, "<br>");
+    if (meta.threadId) payload.threadId = meta.threadId;
+    if (meta.emailFrom) payload.emailTo = meta.emailFrom; // reply back to the sender
+  }
+
   const response = await fetch(`${GHL_API_BASE}/conversations/messages`, {
     method: "POST",
     headers: headers(),
-    body: JSON.stringify({
-      type,
-      contactId,
-      message: stripMarkdown(message),
-    }),
+    body: JSON.stringify(payload),
   });
 
   if (!response.ok) {
@@ -190,4 +216,4 @@ function setChannelType(contactId, ghlMessageType) {
   }
 }
 
-module.exports = { sendReply, sendReplyHuman, sendTypingIndicator, sendQuickAck, shouldAck, setChannelType, splitIntoBubbles, stripMarkdown };
+module.exports = { sendReply, sendReplyHuman, sendTypingIndicator, sendQuickAck, shouldAck, setChannelType, setEmailMeta, getChannelType, splitIntoBubbles, stripMarkdown };
