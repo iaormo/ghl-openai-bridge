@@ -285,6 +285,52 @@ function buildInstructions(override) {
   return base + getManilaDateContext();
 }
 
+// Prefetch the contact's info + upcoming appointments and render a compact context block for
+// the system prompt. This removes the getContactInformation/getContactAppointments tool
+// round-trips at conversation start (each one costs a full extra OpenAI call, ~1-2s).
+// Guarded by a timeout so a slow GHL API never delays the reply — on timeout/error the block
+// is simply omitted and the model can still use the tools.
+const CONTEXT_PREFETCH_TIMEOUT_MS = 2500;
+
+function withTimeout(promise, ms) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error("prefetch timeout")), ms)),
+  ]);
+}
+
+async function buildContactContext(contactId) {
+  if (!contactId || !process.env.GHL_API_KEY) return "";
+  const [info, appts] = await Promise.all([
+    withTimeout(getContactInfo(contactId), CONTEXT_PREFETCH_TIMEOUT_MS).catch(() => null),
+    withTimeout(getContactAppointments(contactId), CONTEXT_PREFETCH_TIMEOUT_MS).catch(() => null),
+  ]);
+  if (!info && !appts) return "";
+
+  const lines = ["\n\nCONTACT CONTEXT (preloaded from the CRM — trust this; do NOT call getContactInformation or getContactAppointments unless you need fresher data than shown here):"];
+  if (info) {
+    lines.push(`Name: ${info.fullName || "(unknown)"} | Phone: ${info.phone || "(none)"} | Email: ${info.email || "(none)"}`);
+    if (info.tags && info.tags.length) lines.push(`Tags: ${info.tags.join(", ")}`);
+    const saved = (info.customFields || []).filter((f) => f.value != null && f.value !== "");
+    if (saved.length) {
+      lines.push("Saved fields: " + saved.map((f) => `${f.key}=${f.value}`).join("; "));
+    }
+    lines.push(
+      (info.fullName || saved.length)
+        ? "This is a RETURNING contact — greet them by name and pick up where they left off."
+        : "No saved details — likely a NEW contact."
+    );
+  }
+  if (appts) {
+    lines.push(
+      appts.length
+        ? "Upcoming appointments: " + appts.map((a) => `${a.date} ${a.time} — "${a.title}" (id: ${a.id})`).join(" | ")
+        : "Upcoming appointments: none."
+    );
+  }
+  return lines.join("\n");
+}
+
 // Normalize Responses API usage to the { prompt_tokens, completion_tokens, total_tokens } shape.
 function normalizeUsage(usage) {
   if (!usage) return undefined;
@@ -297,8 +343,11 @@ function normalizeUsage(usage) {
 
 // Production chat — used by the GHL webhook. Uses the OpenAI Responses API.
 async function chat(contactId, message) {
-  const history = await getHistory(contactId, 20);
-  const instructions = buildInstructions();
+  const [history, contactContext] = await Promise.all([
+    getHistory(contactId, 20),
+    buildContactContext(contactId),
+  ]);
+  const instructions = buildInstructions() + contactContext;
   const model = getModel();
   const toolDefs = responsesTools(tools);
 
@@ -368,8 +417,11 @@ async function playgroundChat(contactId, message, opts = {}) {
     enabledTools,
   } = opts;
 
-  const history = await getHistory(contactId, 20);
-  const instructions = buildInstructions(systemPromptOverride ?? null);
+  const [history, contactContext] = await Promise.all([
+    getHistory(contactId, 20),
+    buildContactContext(contactId),
+  ]);
+  const instructions = buildInstructions(systemPromptOverride ?? null) + contactContext;
   const activeModel = model || getModel();
 
   // Filter tools if enabledTools is specified
