@@ -253,19 +253,8 @@ async function runTool(name, argsString, contactId) {
         const name = args.customer_name || (contact && contact.fullName) || "Lead";
         const title = `${name} x ScalePlus - ${args.service}`;
         const notes = args.booking_notes || args.service;
-        const result = await bookAppointment(contactId, args.date_time, title, notes);
 
-        // Log the reason + chat details as a contact note in GHL (best-effort)
-        try {
-          await createContactNote(
-            contactId,
-            `📅 AUTOMATION AUDIT BOOKED\nWhen: ${args.date_time}\nTopic: ${args.service}\nName: ${name} | Email: ${email} | Phone: ${phone}\n\nDetails from chat:\n${notes}`
-          );
-        } catch (err) {
-          console.warn("Booking note creation failed (non-fatal):", err.message);
-        }
-
-        // Human-readable booked time so the model confirms the EXACT slot (no date drift)
+        // Human-readable booked time (used in the confirmation AND the note)
         const bookedFor = new Date(args.date_time).toLocaleString("en-PH", {
           timeZone: TIMEZONE,
           weekday: "long",
@@ -276,6 +265,51 @@ async function runTool(name, argsString, contactId) {
           minute: "2-digit",
           hour12: true,
         });
+
+        // Re-fetch the contact so the note captures the latest qualification fields saved
+        // earlier in this same conversation.
+        let freshContact = contact;
+        try { freshContact = await getContactInfo(contactId); } catch (_) {}
+
+        const result = await bookAppointment(contactId, args.date_time, title, notes);
+
+        // Log a COMPLETE booking note on the contact: booking details + full lead profile
+        // (every saved custom field) + the chat summary — so the team is fully briefed.
+        try {
+          const FIELD_LABELS = {
+            business_name: "Business",
+            industry: "Industry",
+            team_size: "Team size",
+            current_tools: "Current tools",
+            pain_points: "Pain points",
+            service_interest: "Interested in",
+            budget_timeline: "Budget / timeline",
+            lead_status: "Lead status",
+          };
+          const savedFields = ((freshContact && freshContact.customFields) || []).filter(
+            (f) => f.value != null && String(f.value).trim() !== ""
+          );
+          const profile = savedFields
+            .filter((f) => FIELD_LABELS[f.key])
+            .map((f) => `• ${FIELD_LABELS[f.key]}: ${f.value}`)
+            .join("\n");
+          const tags = (freshContact && freshContact.tags && freshContact.tags.length)
+            ? `\nTags: ${freshContact.tags.join(", ")}`
+            : "";
+
+          const noteBody =
+            `📅 AUTOMATION AUDIT BOOKED\n` +
+            `When: ${bookedFor} (Philippine Time)\n` +
+            `Reason / topic: ${args.service}\n` +
+            `Appointment ID: ${result.id || result.appointmentId || "(n/a)"}\n\n` +
+            `CONTACT\n• Name: ${name}\n• Phone: ${phone}\n• Email: ${email}${tags}\n\n` +
+            `LEAD PROFILE\n${profile || "• (none captured yet)"}\n\n` +
+            `REASON FOR BOOKING / CHAT SUMMARY\n${notes}`;
+
+          await createContactNote(contactId, noteBody);
+        } catch (err) {
+          console.warn("Booking note creation failed (non-fatal):", err.message);
+        }
         return JSON.stringify({
           success: true,
           appointmentId: result.id || result.appointmentId,
