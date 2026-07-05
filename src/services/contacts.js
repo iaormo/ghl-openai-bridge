@@ -198,6 +198,20 @@ async function createContactNote(contactId, body) {
   return data.note || data;
 }
 
+// Read a contact's notes (most recent first) — used to build outbound form follow-ups.
+async function getContactNotes(contactId) {
+  const response = await fetch(
+    `${GHL_API_BASE}/contacts/${contactId}/notes`,
+    { headers: headers("2021-07-28") }
+  );
+  if (!response.ok) return [];
+  const data = await response.json();
+  return (data.notes || [])
+    .sort((a, b) => new Date(b.dateAdded || 0) - new Date(a.dateAdded || 0))
+    .map((n) => n.body)
+    .filter(Boolean);
+}
+
 // List all custom fields in the GHL location
 async function getLocationCustomFields() {
   const response = await fetch(
@@ -214,4 +228,4 @@ async function getLocationCustomFields() {
   return data.customFields || [];
 }
 
-module.exports = { getContactInfo, updateContactInfo, updateCustomField, createContactNote, createLocationCustomField, getLocationCustomFields };
+module.exports = { getContactInfo, updateContactInfo, updateCustomField, createContactNote, getContactNotes, createLocationCustomField, getLocationCustomFields };

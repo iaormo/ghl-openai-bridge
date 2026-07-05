@@ -14,6 +14,7 @@ const {
   updateContactInfo,
   updateCustomField,
   createContactNote,
+  getContactNotes,
 } = require("./contacts");
 const { getBrain } = require("./brain");
 
@@ -561,6 +562,60 @@ async function chat(contactId, message, channel = "chat") {
   return reply;
 }
 
+// Compose a FIRST-TOUCH outbound email for a lead who just filled out a form. Reads their
+// notes + saved fields, writes a warm personalized email that engages and drives to booking.
+async function composeOutreach(contactId, formContext = "") {
+  const [contactContext, notes] = await Promise.all([
+    buildContactContext(contactId),
+    getContactNotes(contactId).catch(() => []),
+  ]);
+  const notesText = notes.length ? notes.slice(0, 8).join("\n---\n") : "(no notes on file)";
+
+  const directive =
+    "\n\n=== OUTBOUND FIRST-TOUCH TASK ===\n" +
+    "A NEW LEAD just filled out the contact form on scaleplus.io. This is your FIRST email to " +
+    "them — they have NOT messaged you, so don't write as if continuing a chat. Write a genuine, " +
+    "personalized outreach EMAIL.\n\n" +
+    "WHAT THEY SUBMITTED / NOTES ON FILE:\n" + notesText + "\n" +
+    (formContext ? "\nFORM DETAILS:\n" + formContext + "\n" : "") +
+    "\nThe email must:\n" +
+    "- Open warmly with their first name if known.\n" +
+    "- Show you actually read what they shared — reference a specific detail (their business, " +
+    "goal, or need). Never generic.\n" +
+    "- Ask 1-2 genuine questions to understand their situation.\n" +
+    "- End with a clear, low-pressure CTA to book the free automation audit call (offer to find a time).\n" +
+    "- Sound like a real person wrote it — short, warm, no markdown, sign off '— Skye, ScalePlus'.\n" +
+    "FORMAT: first line exactly 'Subject: <short compelling subject>', then a blank line, then the email body.\n" +
+    "Also, if the notes contain business details not yet saved as fields, save them with updateCustomField.";
+
+  const instructions = buildInstructions() + contactContext + channelNote("Email") + directive;
+  const input = [{ role: "user", content: "Write the outreach email now." }];
+  const model = getModel();
+  const toolDefs = responsesTools(tools);
+
+  let response = await getClient().responses.create({
+    model, instructions, input, tools: toolDefs, max_output_tokens: 700, store: false,
+  });
+  let rounds = 0;
+  while (rounds < 5) {
+    const calls = (response.output || []).filter((o) => o.type === "function_call");
+    if (!calls.length) break;
+    rounds++;
+    input.push(...response.output);
+    for (const call of calls) {
+      const result = await runTool(call.name, call.arguments, contactId);
+      input.push({ type: "function_call_output", call_id: call.call_id, output: result });
+    }
+    response = await getClient().responses.create({
+      model, instructions, input, tools: toolDefs, max_output_tokens: 700, store: false,
+    });
+  }
+
+  const reply = response.output_text;
+  if (reply) await saveMessage(contactId, "assistant", reply); // so the thread has context if they reply
+  return reply;
+}
+
 // Playground chat — accepts overrides for temperature, top_p, max_tokens, model,
 // systemPromptOverride, and enabledTools. Returns { reply, toolCalls, model, usage }.
 async function playgroundChat(contactId, message, opts = {}) {
@@ -649,6 +704,7 @@ async function playgroundChat(contactId, message, opts = {}) {
 
 module.exports = {
   chat,
+  composeOutreach,
   playgroundChat,
   getClient,
   setApiKey,

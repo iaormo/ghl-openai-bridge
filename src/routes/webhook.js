@@ -1,5 +1,5 @@
 const express = require("express");
-const { chat } = require("../services/openai");
+const { chat, composeOutreach } = require("../services/openai");
 const { sendReply, sendReplyHuman, sendTypingIndicator, setChannelType, setChannel, detectChannel, setEmailMeta, getChannelType } = require("../services/ghl");
 
 const router = express.Router();
@@ -7,6 +7,29 @@ const router = express.Router();
 // Track recently processed messages to prevent duplicates
 const processed = new Map();
 const DEDUP_TTL = 60_000; // 60 seconds
+
+// Track recent form outreach so a form submission never triggers two emails
+const outreachSent = new Map();
+const OUTREACH_DEDUP_TTL = 10 * 60_000; // 10 minutes
+
+// Build a readable summary of form fields present in the webhook payload
+function summarizeFormPayload(body) {
+  const parts = [];
+  if (body.message?.body) parts.push(String(body.message.body).trim());
+  const cd = body.customData || body.custom_data;
+  if (cd && typeof cd === "object") {
+    for (const [k, v] of Object.entries(cd)) {
+      if (v && String(v).trim()) parts.push(`${k}: ${v}`);
+    }
+  }
+  // common form field names GHL may pass at the top level
+  const fields = ["service", "interest", "budget", "company", "business", "website", "industry",
+    "how_can_we_help", "message_body", "comments", "details", "notes", "need", "goal", "inquiry"];
+  for (const f of fields) {
+    if (body[f] && String(body[f]).trim()) parts.push(`${f}: ${body[f]}`);
+  }
+  return parts.join("\n");
+}
 
 function isDuplicate(messageId) {
   if (!messageId) return false;
@@ -109,6 +132,48 @@ router.post("/inbound", async (req, res) => {
         message: error.message,
       });
     }
+  }
+});
+
+// --- FORM OUTREACH: a lead filled out the scaleplus.io form -> send them a first-touch email ---
+router.post("/form", async (req, res) => {
+  try {
+    const body = req.body;
+    const contactId = body.contact_id || body.contactId || body.contact?.id;
+    if (!contactId) {
+      return res.status(200).json({ skipped: true, reason: "no contactId in payload" });
+    }
+
+    // Don't email the same lead twice for one submission (retries / duplicate triggers)
+    const now = Date.now();
+    const last = outreachSent.get(contactId);
+    for (const [k, ts] of outreachSent) if (now - ts > OUTREACH_DEDUP_TTL) outreachSent.delete(k);
+    if (last && now - last < OUTREACH_DEDUP_TTL) {
+      return res.status(200).json({ skipped: true, reason: "outreach already sent recently" });
+    }
+    outreachSent.set(contactId, now);
+
+    const locationId = body.location?.id || body.locationId || body.location_id;
+    console.log(`Form outreach trigger for contact ${contactId} | workflow: ${body.workflow?.name || "-"}`);
+
+    // Respond immediately so GHL doesn't retry
+    res.json({ success: true, contactId, status: "sending outreach" });
+
+    // Build context from the form payload, then compose + send the email
+    const formContext = summarizeFormPayload(body);
+    setChannel(contactId, "Email");
+    setEmailMeta(contactId, { subject: "Thanks for reaching out to ScalePlus 👋" });
+
+    const email = await composeOutreach(contactId, formContext);
+    if (email && process.env.GHL_API_KEY) {
+      await sendReplyHuman(contactId, email, locationId);
+      console.log(`Outreach email sent to contact ${contactId}`);
+    } else {
+      console.warn(`Outreach not sent for ${contactId} (no email text or no GHL key)`);
+    }
+  } catch (error) {
+    console.error("Form outreach error:", error);
+    if (!res.headersSent) res.status(500).json({ error: error.message });
   }
 });
 
