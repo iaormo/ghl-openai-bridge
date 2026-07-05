@@ -57,7 +57,7 @@ async function getAvailableSlots(startDate, endDate) {
   const result = {};
   for (const [date, info] of Object.entries(data)) {
     if (date === "traceId") continue;
-    result[date] = (info.slots || []).map((slot) => {
+    const all = (info.slots || []).map((slot) => {
       const d = new Date(slot);
       return {
         iso: slot,
@@ -69,6 +69,15 @@ async function getAvailableSlots(startDate, endDate) {
         }),
       };
     });
+    // Offer only a handful of evenly-spread options (morning→evening) so the bot presents
+    // a few clean choices instead of dumping 30+ times. Full count kept for context.
+    const MAX = 6;
+    let picked = all;
+    if (all.length > MAX) {
+      const step = (all.length - 1) / (MAX - 1);
+      picked = Array.from({ length: MAX }, (_, i) => all[Math.round(i * step)]);
+    }
+    result[date] = { totalAvailable: all.length, options: picked };
   }
   return result;
 }

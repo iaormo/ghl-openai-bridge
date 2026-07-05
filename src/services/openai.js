@@ -104,7 +104,7 @@ Call this whenever the lead shares qualification info (business details, pain po
     type: "function",
     function: {
       name: "getAvailableSlots",
-      description: "Check available appointment time slots for a specific date. Returns all open 30-minute slots.",
+      description: "Check open times for the FREE AUTOMATION AUDIT call on a date. Returns { totalAvailable, options } per date — 'options' is a short curated list of {iso, display} times to offer. Present just 2-3 of them conversationally (e.g. morning vs afternoon); do NOT list them all. Only use this when booking the automation audit call.",
       parameters: {
         type: "object",
         properties: {
@@ -119,12 +119,12 @@ Call this whenever the lead shares qualification info (business details, pain po
     type: "function",
     function: {
       name: "appointmentBooking",
-      description: "Book the free automation audit / consultation call for the lead. Requires their name, the call topic, and the confirmed date and time. Only call after the lead confirms the slot.",
+      description: "Book the FREE AUTOMATION AUDIT call (aka discovery/strategy call) for the lead. ONLY use this for the automation audit call — never for CRM signups (send CRM-interested leads to scaleplus.io/crm instead) or any other purpose. Requires their name, the topic, and a confirmed date/time. Only call AFTER the lead has picked a specific slot you offered, and pass the exact `iso` value from getAvailableSlots as date_time.",
       parameters: {
         type: "object",
         properties: {
-          date_time: { type: "string", description: "Appointment date and time in ISO format (e.g. 2026-03-08T14:00:00+08:00)" },
-          service: { type: "string", description: "The topic of the call (e.g. 'Automation Audit — chatbot for dental clinic')" },
+          date_time: { type: "string", description: "The exact `iso` value of the chosen slot from getAvailableSlots (e.g. 2026-03-08T14:00:00+08:00). Must be a real available slot." },
+          service: { type: "string", description: "The topic of the audit call (e.g. 'Automation Audit — after-hours FB inquiries for dental clinic')" },
           customer_name: { type: "string", description: "Lead's name for the appointment title" },
           phone: { type: "string", description: "Lead's phone number" },
         },
