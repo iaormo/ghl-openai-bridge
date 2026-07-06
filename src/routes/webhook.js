@@ -1,6 +1,6 @@
 const express = require("express");
 const { chat, composeOutreach } = require("../services/openai");
-const { sendReply, sendReplyHuman, sendTypingIndicator, setChannelType, setChannel, detectChannel, setEmailMeta, getChannelType } = require("../services/ghl");
+const { sendReply, sendReplyHuman, sendTypingIndicator, setChannelType, setChannel, detectChannel, setEmailMeta, captureEmailThread, getChannelType } = require("../services/ghl");
 const { sendSms, parseInboundSms } = require("../services/sms");
 const { upsertContactByPhone } = require("../services/contacts");
 
@@ -117,6 +117,11 @@ router.post("/inbound", async (req, res) => {
     // --- PROCESS ASYNC (after response sent) ---
     // Live Chat native typing animation while the AI composes (no-op on other channels)
     sendTypingIndicator(contactId, locationId);
+
+    // For email, pull the real subject + thread id from GHL so the reply threads (Re: subject)
+    if (channel === "Email") {
+      await captureEmailThread(contactId, locationId);
+    }
 
     const reply = await chat(contactId, message, channel);
     console.log(`AI reply for contact ${contactId}: ${reply}`);

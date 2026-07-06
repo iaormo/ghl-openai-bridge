@@ -20,6 +20,43 @@ function getChannelType(contactId) {
   return channelCache.get(contactId) || DEFAULT_TYPE;
 }
 
+// For an inbound email, look up the contact's email conversation in GHL to grab the subject +
+// thread/conversation id + last message id, so the reply threads in-place with "Re: <subject>".
+// (GHL's workflow webhook doesn't include these.) Best-effort; safe to fail.
+async function captureEmailThread(contactId, locationId) {
+  try {
+    const loc = locationId || process.env.GHL_LOCATION_ID;
+    const s = await fetch(
+      `${GHL_API_BASE}/conversations/search?locationId=${loc}&contactId=${contactId}`,
+      { headers: headers() }
+    );
+    if (!s.ok) return;
+    const sd = await s.json();
+    const conv = (sd.conversations || [])[0];
+    if (!conv) return;
+    const meta = { threadId: conv.id };
+
+    const m = await fetch(`${GHL_API_BASE}/conversations/${conv.id}/messages`, { headers: headers() });
+    if (m.ok) {
+      const md = await m.json();
+      const msgs = (md.messages && md.messages.messages) || md.messages || [];
+      const isEmail = (x) => x && (x.type === 3 || x.messageType === "TYPE_EMAIL" || /email/i.test(x.messageType || ""));
+      const lastEmail = msgs.find((x) => isEmail(x) && (x.subject || (x.emailMessage && x.emailMessage.subject)));
+      if (lastEmail) {
+        meta.subject = lastEmail.subject || (lastEmail.emailMessage && lastEmail.emailMessage.subject);
+        meta.messageId = lastEmail.id || lastEmail.messageId;
+      } else {
+        const anyEmail = msgs.find(isEmail);
+        if (anyEmail) meta.messageId = anyEmail.id || anyEmail.messageId;
+      }
+    }
+    setEmailMeta(contactId, meta);
+    console.log(`Email thread captured for ${contactId}: subject="${meta.subject || "(none)"}" thread=${meta.threadId}`);
+  } catch (e) {
+    console.warn("captureEmailThread failed:", e.message);
+  }
+}
+
 function headers() {
   return {
     Authorization: `Bearer ${process.env.GHL_API_KEY}`,
@@ -59,11 +96,25 @@ async function sendReply(contactId, message, locationId) {
   // Email needs a subject (and threads better with subject/thread id + html body)
   if (type === "Email") {
     const meta = emailMeta.get(contactId) || {};
+    let bodyText = clean;
     let subject = meta.subject || "Your message to ScalePlus";
-    if (!/^re:/i.test(subject.trim())) subject = `Re: ${subject}`;
+    // If the model wrote a leading "Subject: ..." line, use it as the real subject and strip it
+    const sm = bodyText.match(/^\s*subject:\s*(.+?)\s*\r?\n+/i);
+    if (sm) {
+      subject = sm[1].trim();
+      bodyText = bodyText.slice(sm[0].length).trim();
+    }
+    const isReply = !!(meta.threadId || meta.messageId);
+    if (isReply && !/^re:/i.test(subject.trim())) subject = `Re: ${subject}`;
     payload.subject = subject;
-    payload.html = clean.replace(/\n/g, "<br>");
+    payload.message = bodyText;
+    payload.html = bodyText.replace(/\n/g, "<br>");
     if (meta.threadId) payload.threadId = meta.threadId;
+    // Reply to the original email so it threads (In-Reply-To/References headers)
+    if (meta.messageId) {
+      payload.replyMessageId = meta.messageId;
+      payload.emailMessageId = meta.messageId;
+    }
     if (meta.emailFrom) payload.emailTo = meta.emailFrom; // reply back to the sender
   }
 
@@ -261,4 +312,4 @@ function detectChannel(body) {
   return channelFromText(body.message?.type || body.lastMessageType || body.last_message_type || body.type);
 }
 
-module.exports = { sendReply, sendReplyHuman, sendTypingIndicator, sendQuickAck, shouldAck, setChannelType, setChannel, detectChannel, setEmailMeta, getChannelType, splitIntoBubbles, stripMarkdown };
+module.exports = { sendReply, sendReplyHuman, sendTypingIndicator, sendQuickAck, shouldAck, setChannelType, setChannel, detectChannel, setEmailMeta, captureEmailThread, getChannelType, splitIntoBubbles, stripMarkdown };
