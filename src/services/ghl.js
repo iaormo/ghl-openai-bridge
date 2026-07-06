@@ -10,7 +10,7 @@ function setEmailMeta(contactId, meta) {
   if (!contactId || !meta) return;
   const cur = emailMeta.get(contactId) || {};
   const next = { ...cur };
-  for (const k of ["subject", "threadId", "messageId", "emailMessageId", "emailFrom", "emailTo"]) {
+  for (const k of ["subject", "threadId", "messageId", "emailMessageId", "emailFrom", "emailTo", "originalFrom", "originalBody", "originalDate"]) {
     if (meta[k]) next[k] = meta[k];
   }
   if (typeof meta.isReply === "boolean") next.isReply = meta.isReply;
@@ -33,6 +33,7 @@ async function captureEmailThread(contactId, locationId) {
     );
     let subject = null;
     let emailMessageId = null;
+    let originalFrom = null, originalBody = null, originalDate = null;
     if (s.ok) {
       const sd = await s.json();
       const conv = (sd.conversations || [])[0];
@@ -51,6 +52,18 @@ async function captureEmailThread(contactId, locationId) {
             subject = lastInbound.meta.email.subject;
             const ids = lastInbound.meta.email.messageIds || [];
             if (ids.length) emailMessageId = ids[ids.length - 1];
+            // Pull the original email's sender/date/body so we can quote it in the reply
+            if (emailMessageId) {
+              try {
+                const em = await fetch(`${GHL_API_BASE}/conversations/messages/email/${emailMessageId}`, { headers: headers() });
+                if (em.ok) {
+                  const e = (await em.json()).emailMessage || {};
+                  originalFrom = e.from;
+                  originalBody = e.body;
+                  originalDate = e.dateAdded;
+                }
+              } catch (_) {}
+            }
           }
         }
       }
@@ -60,6 +73,9 @@ async function captureEmailThread(contactId, locationId) {
     const meta = { isReply: true };
     if (subject) meta.subject = subject;
     if (emailMessageId) meta.emailMessageId = emailMessageId;
+    if (originalFrom) meta.originalFrom = originalFrom;
+    if (originalBody) meta.originalBody = originalBody;
+    if (originalDate) meta.originalDate = originalDate;
     setEmailMeta(contactId, meta);
     console.log(`Email thread captured for ${contactId}: subject="${subject || "(none)"}" replyTo=${emailMessageId || "(none)"}`);
   } catch (e) {
@@ -115,9 +131,26 @@ async function sendReply(contactId, message, locationId) {
       bodyText = bodyText.slice(sm[0].length).trim();
     }
     if (meta.isReply && !/^re:/i.test(subject.trim())) subject = `Re: ${subject}`;
+
+    // Quote the original email below the reply (standard email reply), so the thread shows
+    // what we're replying to — not just the bot's message.
+    let quotePlain = "";
+    let quoteHtml = "";
+    if (meta.isReply && meta.originalBody) {
+      const origText = stripMarkdown(String(meta.originalBody).replace(/<[^>]+>/g, "")).trim();
+      const when = meta.originalDate ? new Date(meta.originalDate).toUTCString() : "";
+      const who = meta.originalFrom || "they";
+      const header = `On ${when}, ${who} wrote:`.replace(/On , /, "");
+      quotePlain = `\n\n${header}\n` + origText.split("\n").map((l) => `> ${l}`).join("\n");
+      quoteHtml =
+        `<br><br><div style="color:#555;">${header}</div>` +
+        `<blockquote style="margin:0 0 0 8px;padding-left:10px;border-left:2px solid #ccc;color:#555;">` +
+        origText.replace(/\n/g, "<br>") + `</blockquote>`;
+    }
+
     payload.subject = subject;
-    payload.message = bodyText;
-    payload.html = bodyText.replace(/\n/g, "<br>");
+    payload.message = bodyText + quotePlain;
+    payload.html = bodyText.replace(/\n/g, "<br>") + quoteHtml;
     if (meta.emailFrom) payload.emailTo = meta.emailFrom; // reply back to the sender
     // Thread the reply: replyMessageId must be the EMAIL message id (meta.email.messageIds),
     // NOT the GHL message id and NOT the conversation id. This sets In-Reply-To so the
