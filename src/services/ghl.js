@@ -10,7 +10,7 @@ function setEmailMeta(contactId, meta) {
   if (!contactId || !meta) return;
   const cur = emailMeta.get(contactId) || {};
   const next = { ...cur };
-  for (const k of ["subject", "threadId", "messageId", "emailFrom", "emailTo"]) {
+  for (const k of ["subject", "threadId", "messageId", "emailMessageId", "emailFrom", "emailTo"]) {
     if (meta[k]) next[k] = meta[k];
   }
   if (typeof meta.isReply === "boolean") next.isReply = meta.isReply;
@@ -32,6 +32,7 @@ async function captureEmailThread(contactId, locationId) {
       { headers: headers() }
     );
     let subject = null;
+    let emailMessageId = null;
     if (s.ok) {
       const sd = await s.json();
       const conv = (sd.conversations || [])[0];
@@ -40,18 +41,27 @@ async function captureEmailThread(contactId, locationId) {
         if (m.ok) {
           const md = await m.json();
           const msgs = (md.messages && md.messages.messages) || md.messages || [];
-          // GHL stores the email subject at message.meta.email.subject. Grab the latest
-          // INBOUND (non-outbound) email's subject so we reply "Re: <their subject>".
+          // GHL stores the email subject at message.meta.email.subject and the RFC email
+          // message id(s) at message.meta.email.messageIds. Reply to the latest inbound email's
+          // email-message-id so it threads (In-Reply-To/References) in the recipient's inbox.
           const lastInbound = msgs.find(
-            (x) => x && x.type === 3 && x.direction !== "outbound" && x.meta && x.meta.email && x.meta.email.subject
+            (x) => x && x.type === 3 && x.direction !== "outbound" && x.meta && x.meta.email
           );
-          if (lastInbound) subject = lastInbound.meta.email.subject;
+          if (lastInbound) {
+            subject = lastInbound.meta.email.subject;
+            const ids = lastInbound.meta.email.messageIds || [];
+            if (ids.length) emailMessageId = ids[ids.length - 1];
+          }
         }
       }
     }
-    // Mark as a reply so the send adds "Re:". GHL threads it by contactId; no threadId needed.
-    setEmailMeta(contactId, subject ? { isReply: true, subject } : { isReply: true });
-    console.log(`Email thread captured for ${contactId}: subject="${subject || "(none)"}" reply=true`);
+    // Mark as a reply so the send adds "Re:", and reply to the original email's message id so
+    // it threads (In-Reply-To) in the recipient's inbox.
+    const meta = { isReply: true };
+    if (subject) meta.subject = subject;
+    if (emailMessageId) meta.emailMessageId = emailMessageId;
+    setEmailMeta(contactId, meta);
+    console.log(`Email thread captured for ${contactId}: subject="${subject || "(none)"}" replyTo=${emailMessageId || "(none)"}`);
   } catch (e) {
     console.warn("captureEmailThread failed:", e.message);
   }
@@ -109,9 +119,10 @@ async function sendReply(contactId, message, locationId) {
     payload.message = bodyText;
     payload.html = bodyText.replace(/\n/g, "<br>");
     if (meta.emailFrom) payload.emailTo = meta.emailFrom; // reply back to the sender
-    // NOTE: GHL threads the reply into the contact's existing email conversation automatically
-    // by contactId. Do NOT pass threadId/replyMessageId — GHL 400s if they aren't a valid
-    // email-thread id (the conversation id is not one), which silently kills the send.
+    // Thread the reply: replyMessageId must be the EMAIL message id (meta.email.messageIds),
+    // NOT the GHL message id and NOT the conversation id. This sets In-Reply-To so the
+    // recipient's inbox threads it. (Passing threadId/GHL-message-id 400s the send.)
+    if (meta.emailMessageId) payload.replyMessageId = meta.emailMessageId;
   }
 
   const response = await fetch(`${GHL_API_BASE}/conversations/messages`, {
