@@ -169,7 +169,7 @@ router.post("/form", async (req, res) => {
     // Build context from the form payload, then compose + send the email
     const formContext = summarizeFormPayload(body);
     setChannel(contactId, "Email");
-    setEmailMeta(contactId, { subject: "Thanks for reaching out to ScalePlus 👋" });
+    setEmailMeta(contactId, { subject: "Thanks for reaching out to ScalePlus 👋", isReply: false });
 
     const email = await composeOutreach(contactId, formContext);
     if (email && process.env.GHL_API_KEY) {
