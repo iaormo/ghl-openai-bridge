@@ -30,7 +30,32 @@ async function initDB() {
   await db.query(`
     CREATE INDEX IF NOT EXISTS idx_messages_contact ON messages(contact_id, created_at DESC)
   `);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT,
+      updated_at TIMESTAMP DEFAULT NOW()
+    )
+  `);
   console.log("Database initialized");
+}
+
+// Persist a small key/value setting (e.g. the Gmail refresh token)
+async function setSetting(key, value) {
+  const db = getPool();
+  if (!db) return;
+  await db.query(
+    `INSERT INTO settings (key, value, updated_at) VALUES ($1, $2, NOW())
+     ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()`,
+    [key, value]
+  );
+}
+
+async function getSetting(key) {
+  const db = getPool();
+  if (!db) return null;
+  const r = await db.query("SELECT value FROM settings WHERE key = $1", [key]);
+  return r.rows[0] ? r.rows[0].value : null;
 }
 
 // Get last N messages for a contact (for conversation context)
@@ -64,4 +89,4 @@ async function deleteHistory(contactId) {
   return { deleted: result.rowCount };
 }
 
-module.exports = { getPool, initDB, getHistory, saveMessage, deleteHistory };
+module.exports = { getPool, initDB, getHistory, saveMessage, deleteHistory, setSetting, getSetting };

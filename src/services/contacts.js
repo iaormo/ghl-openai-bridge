@@ -211,6 +211,23 @@ async function upsertContactByPhone(phone) {
   return c.id;
 }
 
+// Create or find a contact by email (for direct Gmail replies) — returns the id.
+async function upsertContactByEmail(email, name) {
+  const body = { locationId: LOCATION_ID, email };
+  if (name) {
+    const clean = String(name).replace(/<[^>]+>/, "").replace(/"/g, "").trim();
+    if (clean) { const parts = clean.split(/\s+/); body.firstName = parts[0]; body.lastName = parts.slice(1).join(" "); }
+  }
+  const response = await fetch(
+    `${GHL_API_BASE}/contacts/upsert`,
+    { method: "POST", headers: headers("2021-07-28"), body: JSON.stringify(body) }
+  );
+  if (!response.ok) throw new Error(`Failed to upsert contact by email: ${await response.text()}`);
+  const data = await response.json();
+  const c = data.contact || data;
+  return c.id;
+}
+
 // Read a contact's notes (most recent first) — used to build outbound form follow-ups.
 async function getContactNotes(contactId) {
   const response = await fetch(
@@ -241,4 +258,4 @@ async function getLocationCustomFields() {
   return data.customFields || [];
 }
 
-module.exports = { getContactInfo, updateContactInfo, updateCustomField, createContactNote, getContactNotes, upsertContactByPhone, createLocationCustomField, getLocationCustomFields };
+module.exports = { getContactInfo, updateContactInfo, updateCustomField, createContactNote, getContactNotes, upsertContactByPhone, upsertContactByEmail, createLocationCustomField, getLocationCustomFields };
