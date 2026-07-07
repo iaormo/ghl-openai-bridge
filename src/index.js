@@ -6,6 +6,8 @@ const { initDB } = require("./db");
 const webhookRoutes = require("./routes/webhook");
 const playgroundRoutes = require("./routes/playground");
 const gmail = require("./services/gmail");
+const reminders = require("./services/reminders");
+const outreach = require("./services/outreach");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -55,11 +57,14 @@ app.get("/oauth/gmail/callback", async (req, res) => {
 // Start server
 async function start() {
   await initDB();
+  await outreach.initOutreach();
   app.listen(PORT, () => {
     console.log(`Bridge server running on port ${PORT}`);
     console.log(`Webhook URL: http://localhost:${PORT}/webhook/inbound`);
     console.log(`Test endpoint: http://localhost:${PORT}/webhook/test`);
     gmail.startGmailPoller(60000);
+    reminders.startReminderScheduler(5 * 60 * 1000);
+    outreach.startOutreachScheduler(10 * 60 * 1000);
   });
 }
 

@@ -408,6 +408,54 @@ router.get("/gmail-reprocess", async (req, res) => {
   }
 });
 
+// Preview the upcoming calendar bookings the meeting-reminder cadence sees (read-only, no emails).
+router.get("/reminders-preview", async (req, res) => {
+  try {
+    const { getUpcomingAppointments } = require("../services/reminders");
+    const appts = await getUpcomingAppointments(2 * 24 * 3600 * 1000);
+    res.json({
+      success: true,
+      count: appts.length,
+      appointments: appts.map((a) => ({
+        id: a.id,
+        contactId: a.contactId,
+        startTime: a.startTime || a.start,
+        status: a.appointmentStatus || a.status,
+        title: a.title,
+      })),
+    });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// Slot-validation self-check (no booking created): confirms a slot returned by getAvailableSlots
+// actually validates as available via isSlotAvailable — proves the timezone/day-window fix on the
+// live (UTC) server. Also reports the server's timezone.
+router.get("/slot-check", async (req, res) => {
+  try {
+    const cal = require("../services/calendar");
+    const start = req.query.date || new Date().toISOString().slice(0, 10);
+    const avail = await cal.getAvailableSlots(start, start);
+    const days = Object.keys(avail);
+    const out = {
+      serverTZ: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      serverOffsetMin: new Date().getTimezoneOffset(),
+      requestedFrom: start,
+      daysWithOpenings: days,
+    };
+    if (days.length) {
+      const first = avail[days[0]];
+      const iso = first.options[0].iso;
+      const chk = await cal.isSlotAvailable(iso);
+      out.firstSlot = { day: first.label, iso, display: first.options[0].display, validatesAsAvailable: chk.available };
+    }
+    res.json({ success: true, ...out });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 // Capture endpoint — logs exactly what GHL sends so we can see field names
 let lastPayload = null;
 router.post("/capture", (req, res) => {
@@ -431,6 +479,48 @@ router.get("/test", (req, res) => {
       locationId: "string (optional)",
     },
   });
+});
+
+// --- Cold outreach: the Claude scheduled task pushes each day's researched batch here ---
+// Auth: header "x-outreach-key" must match OUTREACH_ENQUEUE_KEY. Body: { leads: [{ email,
+// firstName, company, subject, opener }] }. Leads are queued; the scheduler sends them at 6pm Manila.
+router.post("/outreach/enqueue", async (req, res) => {
+  try {
+    const key = process.env.OUTREACH_ENQUEUE_KEY;
+    if (!key || req.get("x-outreach-key") !== key) {
+      return res.status(401).json({ success: false, error: "unauthorized" });
+    }
+    const outreach = require("../services/outreach");
+    const result = await outreach.enqueueLeads(req.body && req.body.leads);
+    res.json({ success: true, ...result });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// Fire the queued initial batch immediately (manual "send now"), bypassing the 6pm gate.
+router.post("/outreach/send-now", async (req, res) => {
+  try {
+    const key = process.env.OUTREACH_ENQUEUE_KEY;
+    if (!key || req.get("x-outreach-key") !== key) {
+      return res.status(401).json({ success: false, error: "unauthorized" });
+    }
+    const outreach = require("../services/outreach");
+    await outreach.sendDailyBatch({ force: true });
+    res.json({ success: true, ...(await outreach.stats()) });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// Read-only outreach status (counts by stage/status).
+router.get("/outreach/status", async (req, res) => {
+  try {
+    const outreach = require("../services/outreach");
+    res.json({ success: true, ...(await outreach.stats()) });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
 });
 
 module.exports = router;

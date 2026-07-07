@@ -13,6 +13,7 @@ const { getSetting, setSetting } = require("../db");
 const { chat, isValidInquiry } = require("./openai");
 const { upsertContactByEmail } = require("./contacts");
 const { classify, clientContext, isClient } = require("./clients");
+const { stripMarkdown } = require("./ghl");
 
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -266,7 +267,7 @@ async function pollAndReply() {
       let contactId = null;
       try { contactId = await upsertContactByEmail(fromEmail, from); } catch (e) { console.warn("Gmail contact upsert failed:", e.message); }
       const clientCtx = clientContext(fromEmail);
-      const reply = await chat(contactId || `gmail:${fromEmail}`, body, "Email", clientCtx);
+      const reply = stripMarkdown(await chat(contactId || `gmail:${fromEmail}`, body, "Email", clientCtx));
 
       const raw = buildRawReply({
         toEmail: fromEmail,
@@ -357,4 +358,60 @@ function startGmailPoller(intervalMs = 60000) {
   setInterval(() => { pollAndReply().catch((e) => console.error("Gmail poll error:", e.message)); }, intervalMs);
 }
 
-module.exports = { isConfigured, consentUrl, exchangeCode, pollAndReply, inspectInbox, reprocessInbox, startGmailPoller, cfg };
+// ---------- outbound cold send (used by the outreach scheduler) ----------
+
+// Send a brand-new email (new thread) from the configured mailbox. Returns { id, threadId,
+// messageIdHeader } — the Message-ID is captured so follow-ups can thread as proper replies.
+async function sendNewEmail({ toEmail, toName, subject, body }) {
+  const c = cfg();
+  const hdrs = [
+    `From: ${c.fromName} <${c.user}>`,
+    `To: ${toName ? `${toName} <${toEmail}>` : toEmail}`,
+    `Subject: ${subject}`,
+    'Content-Type: text/plain; charset="UTF-8"',
+    "MIME-Version: 1.0",
+  ];
+  const raw = b64urlEncode(hdrs.join("\r\n") + "\r\n\r\n" + body);
+  const sent = await gapi("/messages/send", { method: "POST", body: JSON.stringify({ raw }) });
+  let messageIdHeader = "";
+  try {
+    const meta = await gapi(`/messages/${sent.id}?format=metadata&metadataHeaders=Message-ID`);
+    messageIdHeader = getHeader(meta.payload && meta.payload.headers, "Message-ID");
+  } catch (_) {}
+  return { id: sent.id, threadId: sent.threadId, messageIdHeader };
+}
+
+// Send a follow-up as a threaded reply inside an existing outreach thread.
+async function sendThreadReply({ toEmail, toName, subject, body, threadId, inReplyTo, references }) {
+  const c = cfg();
+  const subj = /^re:/i.test(String(subject || "").trim()) ? subject : `Re: ${subject}`;
+  const hdrs = [
+    `From: ${c.fromName} <${c.user}>`,
+    `To: ${toName ? `${toName} <${toEmail}>` : toEmail}`,
+    `Subject: ${subj}`,
+    inReplyTo ? `In-Reply-To: ${inReplyTo}` : "",
+    references ? `References: ${references}` : inReplyTo ? `References: ${inReplyTo}` : "",
+    'Content-Type: text/plain; charset="UTF-8"',
+    "MIME-Version: 1.0",
+  ].filter(Boolean);
+  const raw = b64urlEncode(hdrs.join("\r\n") + "\r\n\r\n" + body);
+  const sent = await gapi("/messages/send", { method: "POST", body: JSON.stringify({ raw, threadId }) });
+  return { id: sent.id, threadId: sent.threadId };
+}
+
+// Has anyone other than us posted in this thread? Used to stop follow-ups once a lead replies.
+async function threadHasExternalReply(threadId) {
+  if (!threadId) return false;
+  const c = cfg();
+  const ourEmail = (c.user || "").toLowerCase();
+  try {
+    const thread = await gapi(`/threads/${threadId}?format=metadata&metadataHeaders=From`);
+    for (const m of thread.messages || []) {
+      const fromEmail = parseEmail(getHeader(m.payload && m.payload.headers, "From"));
+      if (fromEmail && fromEmail !== ourEmail) return true;
+    }
+  } catch (_) {}
+  return false;
+}
+
+module.exports = { isConfigured, consentUrl, exchangeCode, pollAndReply, inspectInbox, reprocessInbox, startGmailPoller, cfg, sendNewEmail, sendThreadReply, threadHasExternalReply };
