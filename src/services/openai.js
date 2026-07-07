@@ -502,12 +502,12 @@ function channelNote(channel) {
 }
 
 // Production chat — used by the GHL webhook. Uses the OpenAI Responses API.
-async function chat(contactId, message, channel = "chat") {
+async function chat(contactId, message, channel = "chat", extraContext = "") {
   const [history, contactContext] = await Promise.all([
     getHistory(contactId, 20),
     buildContactContext(contactId),
   ]);
-  const instructions = buildInstructions() + contactContext + channelNote(channel);
+  const instructions = buildInstructions() + contactContext + channelNote(channel) + (extraContext || "");
   const model = getModel();
   const toolDefs = responsesTools(tools);
 
@@ -707,10 +707,116 @@ async function playgroundChat(contactId, message, opts = {}) {
   };
 }
 
+// Lightweight gate for the email autoresponder: does this inbound email genuinely warrant a
+// personal reply — a real human with a real question/request — vs. automated mail, newsletters,
+// warmup/cold-outreach filler, or pleasantries that need no response? Returns true (reply) /
+// false (skip). Fails OPEN (reply) on any error so a real inquiry is never silently dropped.
+async function isValidInquiry(subject, body) {
+  const input =
+    "You screen inbound email for a busy founder's auto-responder. Decide if THIS email genuinely " +
+    "warrants a personal reply.\n\n" +
+    "Answer YES if a real person is asking or requesting something that needs a response — a sales " +
+    "inquiry, a real question, a client request, a genuine message expecting a reply.\n" +
+    "Answer NO if it is: automated / notification / receipt / newsletter / marketing; cold-outreach " +
+    "or email-warmup filler (generic flattery like \"loved your post\", \"thanks for reaching out\", " +
+    "\"great to connect\" with no concrete ask); pure pleasantries or acknowledgements needing no " +
+    "reply (\"thanks!\", \"got it\", \"hey\"); spam; or anything with no actual question or request.\n\n" +
+    `Subject: ${subject || "(none)"}\n` +
+    `Body:\n${String(body).slice(0, 1500)}\n\n` +
+    "Reply with exactly one word: YES or NO.";
+  try {
+    const r = await getClient().responses.create({ model: getModel(), input, max_output_tokens: 16, store: false });
+    const out = (r.output_text || "").trim().toUpperCase();
+    return !out.startsWith("NO"); // NO → skip; YES or anything unexpected → reply (fail open)
+  } catch (e) {
+    console.warn("isValidInquiry failed, defaulting to reply:", e.message);
+    return true;
+  }
+}
+
+// Sentiment gate for ReachInbox replies: is THIS reply genuinely POSITIVE / interested — worth
+// Ian personally jumping in — vs a rejection, unsubscribe, out-of-office/auto-reply, or noise?
+// Returns true (positive) / false (skip). Fails CLOSED (skip) so we never chase a "not interested".
+async function isPositiveReply(subject, body) {
+  const input =
+    "You screen replies to a founder's cold outreach email. Decide if THIS reply shows GENUINE " +
+    "POSITIVE INTEREST worth a personal follow-up from the founder.\n\n" +
+    "Answer YES only if the person is interested or open — wants to know more, asks about pricing / " +
+    "how it works, says to reach out or call, asks for a time, or is positively curious.\n" +
+    "Answer NO for: 'not interested', 'unsubscribe', 'remove me', 'stop', hostile replies, " +
+    "out-of-office / auto-replies, 'wrong person', bounces, or anything neutral with no real interest.\n\n" +
+    `Subject: ${subject || "(none)"}\n` +
+    `Reply:\n${String(body).slice(0, 1500)}\n\n` +
+    "Reply with exactly one word: YES or NO.";
+  try {
+    const r = await getClient().responses.create({ model: getModel(), input, max_output_tokens: 16, store: false });
+    const out = (r.output_text || "").trim().toUpperCase();
+    return out.startsWith("YES"); // only an explicit YES proceeds; fail closed on NO/error
+  } catch (e) {
+    console.warn("isPositiveReply failed, defaulting to skip:", e.message);
+    return false;
+  }
+}
+
+// Compose Ian's first-touch re-engagement email for a lead who replied POSITIVELY to a rep's cold
+// email in ReachInbox. Opens as Ian, frames it as a warm hand-off from the rep, references what the
+// lead actually said, and drives to booking. Returns "Subject: <..>\n\n<body>" (subject parsed at
+// send time by ghl.sendReply).
+async function composeReachinboxReengage(contactId, { firstName = "", repName = "", replyBody = "", campaignName = "" } = {}) {
+  const directive =
+    "\n\n=== REACHINBOX POSITIVE-REPLY RE-ENGAGEMENT TASK ===\n" +
+    `A lead just replied POSITIVELY to a cold outreach email sent by our rep${repName ? " " + repName : ""}` +
+    (campaignName ? ` (campaign: ${campaignName})` : "") + ". You are Ian, the founder, personally " +
+    "stepping in to take it from here. This is your FIRST email to them — they have NOT spoken to YOU " +
+    "yet, so don't write as if continuing a chat.\n\n" +
+    "WHAT THE LEAD REPLIED:\n\"" + String(replyBody).slice(0, 1200).trim() + "\"\n\n" +
+    "The email MUST:\n" +
+    `- Open with EXACTLY this line: 'Hey ${firstName || "there"}! Ian here, founder of ScalePlus.'\n` +
+    `- Make clear you're following up on ${repName ? repName + "'s" : "our rep's"} email that they just ` +
+    "replied to — a warm hand-off from the team, not a brand-new pitch.\n" +
+    "- Reference the SPECIFIC thing they said in their reply so it's obviously personal, not templated.\n" +
+    "- Be warm, human and short. Ask ONE genuine question about their situation.\n" +
+    "- Close with ONE natural next step: offer to hop on a short call and find a time. You are ALREADY " +
+    "in a conversation with them — do NOT pitch a 'free automation audit', do NOT say 'I recommend " +
+    "booking...', and do NOT use salesy booking language. Just suggest a quick call the way a real " +
+    "person would when a chat is already going.\n" +
+    "- Plain text, no markdown, sign off '— Ian from ScalePlus'.\n" +
+    "SUBJECT: the first line must be exactly 'Subject: <subject>'. The subject must reference what they " +
+    `replied about AND signal it's a follow-up to ${repName ? repName + "'s" : "our rep's"} email ` +
+    "(e.g. \"Following up on " + (repName || "our rep") + "'s note — <their topic>\"). Then a blank line, then the body.";
+
+  const contactContext = await buildContactContext(contactId).catch(() => "");
+  const instructions = buildInstructions() + contactContext + channelNote("Email") + directive;
+  const input = [{ role: "user", content: "Write the re-engagement email now." }];
+  const model = getModel();
+  const toolDefs = responsesTools(tools);
+
+  let response = await getClient().responses.create({ model, instructions, input, tools: toolDefs, max_output_tokens: 700, store: false });
+  let rounds = 0;
+  while (rounds < 5) {
+    const calls = (response.output || []).filter((o) => o.type === "function_call");
+    if (!calls.length) break;
+    rounds++;
+    input.push(...response.output);
+    for (const call of calls) {
+      const result = await runTool(call.name, call.arguments, contactId);
+      input.push({ type: "function_call_output", call_id: call.call_id, output: result });
+    }
+    response = await getClient().responses.create({ model, instructions, input, tools: toolDefs, max_output_tokens: 700, store: false });
+  }
+
+  const reply = response.output_text;
+  if (reply && contactId) await saveMessage(contactId, "assistant", reply); // seed the thread for their reply
+  return reply;
+}
+
 module.exports = {
   chat,
   composeOutreach,
+  composeReachinboxReengage,
+  isPositiveReply,
   playgroundChat,
+  isValidInquiry,
   getClient,
   setApiKey,
   getModel,

@@ -1,8 +1,8 @@
 const express = require("express");
-const { chat, composeOutreach } = require("../services/openai");
+const { chat, composeOutreach, composeReachinboxReengage, isPositiveReply } = require("../services/openai");
 const { sendReply, sendReplyHuman, sendTypingIndicator, setChannelType, setChannel, detectChannel, setEmailMeta, captureEmailThread, getChannelType } = require("../services/ghl");
 const { sendSms, parseInboundSms } = require("../services/sms");
-const { upsertContactByPhone } = require("../services/contacts");
+const { upsertContactByPhone, upsertContactByEmail, createContactNote } = require("../services/contacts");
 
 const router = express.Router();
 
@@ -31,6 +31,24 @@ function summarizeFormPayload(body) {
     if (body[f] && String(body[f]).trim()) parts.push(`${f}: ${body[f]}`);
   }
   return parts.join("\n");
+}
+
+// Derive a rep's display name from their ReachInbox sending mailbox (the "derive from email"
+// choice). "sarah.cruz@scaleplus.io" -> "Sarah Cruz", "jm@scaleplus.io" -> "Jm". Optional exact
+// overrides via REACHINBOX_REP_NAMES="sarah@x.io:Sarah Cruz,jm@x.io:JM Reyes" for generic mailboxes.
+function repNameFromEmail(email) {
+  if (!email) return "";
+  const addr = String(email).trim().toLowerCase();
+  for (const pair of (process.env.REACHINBOX_REP_NAMES || "").split(",")) {
+    const [k, v] = pair.split(":");
+    if (k && v && k.trim().toLowerCase() === addr) return v.trim();
+  }
+  const local = (addr.split("@")[0] || "").replace(/\+.*$/, "");
+  return local
+    .split(/[._-]+/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
 }
 
 function isDuplicate(messageId) {
@@ -184,6 +202,116 @@ router.post("/form", async (req, res) => {
   }
 });
 
+// --- REACHINBOX: a lead replied to a rep's cold email -> if positive, Ian re-engages via GHL email ---
+// Register in ReachInbox: Settings > Integrations > Webhooks, event REPLY_RECEIVED (and/or
+// LEAD_INTERESTED), URL = https://<host>/webhook/reachinbox  (append ?token=... if you set
+// REACHINBOX_WEBHOOK_TOKEN). Ian's email then hands off to the normal /inbound reply→booking loop.
+router.post("/reachinbox", async (req, res) => {
+  try {
+    // Optional shared secret: if REACHINBOX_WEBHOOK_TOKEN is set, require a matching ?token=.
+    const expected = process.env.REACHINBOX_WEBHOOK_TOKEN;
+    if (expected && req.query.token !== expected) {
+      return res.status(401).json({ error: "unauthorized" });
+    }
+
+    const b = req.body || {};
+    const event = b.event || b.eventType;
+    const leadEmail = b.lead_email || b.leadEmail;
+    const replyBody = b.email_replied_body || b.emailRepliedBody || b.reply_body || "";
+    const firstName = b.lead_first_name || b.leadFirstName || "";
+    const lastName = b.lead_last_name || b.leadLastName || "";
+    const emailAccount = b.email_account || b.emailAccount || ""; // the rep's sending mailbox
+    const campaignName = b.campaign_name || b.campaignName || "";
+    const messageId = b.message_id || b.messageId;
+
+    // Only act on a reply / interested event with a lead email; acknowledge everything else 200
+    // so ReachInbox doesn't retry or disable the webhook.
+    const actionable = event === "REPLY_RECEIVED" || event === "LEAD_INTERESTED";
+    if (!actionable || !leadEmail) {
+      return res.status(200).json({ skipped: true, reason: `ignored event ${event || "(none)"}` });
+    }
+
+    // Dedup so ReachInbox retries / duplicate events never double-send.
+    if (isDuplicate(messageId || `ri:${leadEmail}:${String(replyBody).slice(0, 40)}`)) {
+      return res.status(200).json({ skipped: true, reason: "duplicate" });
+    }
+
+    // Ack immediately so ReachInbox doesn't time out; do the real work async.
+    res.status(200).json({ success: true, status: "processing", lead: leadEmail });
+
+    const repName = repNameFromEmail(emailAccount);       // full name — for the team-facing note
+    const repFirstName = repName.split(/\s+/)[0] || "";   // first name only — for the email copy
+
+    // LEAD_INTERESTED is already vetted by ReachInbox. For a raw REPLY_RECEIVED, run our own
+    // positive-sentiment gate so we never chase a "not interested" / unsubscribe / auto-reply.
+    if (event === "REPLY_RECEIVED") {
+      const positive = await isPositiveReply(campaignName, replyBody);
+      if (!positive) {
+        console.log(`ReachInbox: skipped ${leadEmail} — reply not positive`);
+        return;
+      }
+    }
+
+    // Enrich from the full ReachInbox lead record (the webhook omits it): LinkedIn, phone, company,
+    // website — so the GHL contact we create is complete, not just an email + name.
+    let lf = {};
+    try {
+      const reachinbox = require("../services/reachinbox");
+      const lead = await reachinbox.getLeadDetails({
+        campaignId: b.campaign_id || b.campaignId,
+        id: b.lead_id || b.leadId,
+        email: leadEmail,
+      });
+      if (lead) lf = reachinbox.extractContactFields(lead);
+    } catch (e) { console.warn("ReachInbox lead enrichment failed:", e.message); }
+
+    // GHL contact (with email + LinkedIn + phone/company) so booking/notes/memory + the normal
+    // inbound reply loop all work.
+    const fullName = `${firstName || lf.firstName} ${lastName || lf.lastName}`.trim();
+    let contactId = null;
+    try {
+      contactId = await upsertContactByEmail(leadEmail, fullName, {
+        linkedin: lf.linkedin,
+        phone: lf.phone,
+        companyName: lf.companyName,
+        website: lf.website,
+      });
+    } catch (e) { console.warn("ReachInbox contact upsert failed:", e.message); }
+    const convId = contactId || `reachinbox:${leadEmail}`;
+    if (contactId) console.log(`ReachInbox: GHL contact ${contactId} — email=${leadEmail} linkedin=${lf.linkedin || "(none)"}`);
+
+    // Log the lead's actual reply as a note on the contact, so the team has the full context.
+    if (contactId && replyBody) {
+      const note =
+        `💬 REACHINBOX POSITIVE REPLY\n` +
+        `Campaign: ${campaignName || "(unknown)"}\n` +
+        `Rep: ${repName || "(unknown)"}${emailAccount ? ` <${emailAccount}>` : ""}\n` +
+        (lf.linkedin ? `LinkedIn: ${lf.linkedin}\n` : "") +
+        `\nWhat they replied:\n"${String(replyBody).trim()}"`;
+      try { await createContactNote(contactId, note); }
+      catch (e) { console.warn("ReachInbox note creation failed (non-fatal):", e.message); }
+    }
+
+    // Send as a fresh Ian email through GHL (a new first-touch, not a threaded in-place reply).
+    if (contactId) {
+      setChannel(contactId, "Email");
+      // emailFrom drives payload.emailTo in ghl.sendReply, so this delivers to the lead.
+      setEmailMeta(contactId, { isReply: false, emailFrom: leadEmail, subject: "A note from Ian at ScalePlus" });
+    }
+
+    const email = await composeReachinboxReengage(convId, { firstName, repName: repFirstName, replyBody, campaignName });
+    if (email && process.env.GHL_API_KEY && contactId) {
+      await sendReply(contactId, email);
+      console.log(`ReachInbox: Ian re-engaged ${leadEmail} (rep "${repName || "?"}", campaign "${campaignName}")`);
+    } else {
+      console.warn(`ReachInbox: not sent for ${leadEmail} (hasEmail=${!!email} contactId=${contactId})`);
+    }
+  } catch (error) {
+    console.error("ReachInbox webhook error:", error);
+    if (!res.headersSent) res.status(500).json({ error: error.message });
+  }
+});
+
 // --- SMS via Android gateway (Philippine number connected by webhook) ---
 router.post("/sms", async (req, res) => {
   try {
@@ -255,6 +383,28 @@ router.post("/debug", async (req, res) => {
   } catch (error) {
     steps.error = { message: error.message, stack: error.stack?.split("\n").slice(0, 3) };
     res.status(500).json({ success: false, steps });
+  }
+});
+
+// Dry-run: what the Gmail poller WOULD do with current unread inbox mail — no sends, no changes.
+router.get("/inspect-inbox", async (req, res) => {
+  try {
+    const gmail = require("../services/gmail");
+    const out = await gmail.inspectInbox();
+    res.json({ success: true, ...out });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// One-shot recovery: clear the "/Seen" marker from recent inbox mail so the poller re-checks it.
+router.get("/gmail-reprocess", async (req, res) => {
+  try {
+    const gmail = require("../services/gmail");
+    const out = await gmail.reprocessInbox();
+    res.json({ success: true, ...out });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
   }
 });
 

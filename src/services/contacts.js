@@ -211,12 +211,40 @@ async function upsertContactByPhone(phone) {
   return c.id;
 }
 
-// Create or find a contact by email (for direct Gmail replies) — returns the id.
-async function upsertContactByEmail(email, name) {
+// Find a location custom field by name (case-insensitive), creating it if missing. Returns its id.
+async function ensureLocationCustomField(name, dataType = "TEXT") {
+  try {
+    const fields = await getLocationCustomFields();
+    const hit = fields.find((f) => String(f.name || "").toLowerCase() === name.toLowerCase());
+    if (hit) return hit.id;
+  } catch (_) { /* fall through and try to create */ }
+  const created = await createLocationCustomField(name, dataType);
+  fieldDefCache = null; // bust the id→key cache so the new field resolves on next read
+  return created.id;
+}
+
+// Create or find a contact by email — returns the id. `extra` optionally enriches the record:
+//   { firstName, lastName, phone, companyName, website, linkedin }
+// Native GHL fields go on the upsert body; LinkedIn (no native field) is written as a "LinkedIn URL"
+// custom field. Enrichment is best-effort — a failed field lookup never blocks contact creation.
+async function upsertContactByEmail(email, name, extra = {}) {
   const body = { locationId: LOCATION_ID, email };
   if (name) {
     const clean = String(name).replace(/<[^>]+>/, "").replace(/"/g, "").trim();
     if (clean) { const parts = clean.split(/\s+/); body.firstName = parts[0]; body.lastName = parts.slice(1).join(" "); }
+  }
+  if (extra.firstName) body.firstName = extra.firstName;
+  if (extra.lastName) body.lastName = extra.lastName;
+  if (extra.phone) body.phone = String(extra.phone).replace(/[\s-]/g, "");
+  if (extra.companyName) body.companyName = extra.companyName;
+  if (extra.website) body.website = extra.website;
+  if (extra.linkedin) {
+    try {
+      const fieldId = await ensureLocationCustomField("LinkedIn URL", "TEXT");
+      body.customFields = [{ id: fieldId, value: extra.linkedin }];
+    } catch (e) {
+      console.warn("LinkedIn custom-field ensure failed (continuing):", e.message);
+    }
   }
   const response = await fetch(
     `${GHL_API_BASE}/contacts/upsert`,
@@ -258,4 +286,4 @@ async function getLocationCustomFields() {
   return data.customFields || [];
 }
 
-module.exports = { getContactInfo, updateContactInfo, updateCustomField, createContactNote, getContactNotes, upsertContactByPhone, upsertContactByEmail, createLocationCustomField, getLocationCustomFields };
+module.exports = { getContactInfo, updateContactInfo, updateCustomField, createContactNote, getContactNotes, upsertContactByPhone, upsertContactByEmail, createLocationCustomField, ensureLocationCustomField, getLocationCustomFields };

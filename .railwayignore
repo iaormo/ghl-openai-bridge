@@ -1,0 +1,8 @@
+# Railway upload ignore. When this file exists, `railway up` uses it INSTEAD of .gitignore.
+# We deliberately DO NOT list the knowledge .md files here (clients.md, redline.md,
+# redlinelogs.md, scaleplus.md, scaleplus-crm.md) — they are gitignored (kept out of the
+# public GitHub repo) but MUST ship to the running bot, which loads them at runtime.
+node_modules
+.env
+.git
+.DS_Store

@@ -1,2 +1,14 @@
 node_modules
 .env
+.DS_Store
+
+# Secrets / credentials dump — must NEVER hit the public GitHub repo.
+API.md
+
+# Private knowledge base + client data — shipped to the bot via `railway up`
+# (see .railwayignore) but deliberately kept OUT of the public GitHub repo.
+clients.md
+redline.md
+redlinelogs.md
+scaleplus.md
+scaleplus-crm.md

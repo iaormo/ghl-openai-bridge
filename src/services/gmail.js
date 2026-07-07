@@ -10,8 +10,9 @@
 //   GMAIL_REFRESH_TOKEN                     — optional; otherwise read from the DB settings store
 
 const { getSetting, setSetting } = require("../db");
-const { chat } = require("./openai");
+const { chat, isValidInquiry } = require("./openai");
 const { upsertContactByEmail } = require("./contacts");
+const { classify, clientContext, isClient } = require("./clients");
 
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -162,23 +163,47 @@ async function getLabelId(name) {
   return lbl ? lbl.id : null;
 }
 
+async function getOrCreateLabel(name) {
+  const existing = await getLabelId(name);
+  if (existing) return existing;
+  const created = await gapi("/labels", {
+    method: "POST",
+    body: JSON.stringify({ name, labelListVisibility: "labelShow", messageListVisibility: "show" }),
+  });
+  return created.id;
+}
+
 const AUTOMATED = /(noreply|no-reply|mailer-daemon|postmaster|notifications?@|donotreply|do-not-reply|bounce)/i;
 
-// Check the scoped label for unread emails and reply to each real one. Marks handled emails read.
+// Reply to each real email carrying the trigger label — whether you tagged it by hand or a
+// filter applied it. Handled emails lose the trigger label (and successful replies are filed
+// under "<label>/Replied") so nothing is ever answered twice.
 async function pollAndReply() {
   if (!isConfigured()) return;
   const c = cfg();
   let labelId;
   try { labelId = await getLabelId(c.label); } catch (e) { console.warn("Gmail label lookup failed:", e.message); return; }
-  if (!labelId) { console.warn(`Gmail label "${c.label}" not found — create it and a filter that applies it to inquiries`); return; }
+  if (!labelId) { console.warn(`Gmail label "${c.label}" not found — create it in Gmail; Skye answers anything you tag with it`); return; }
+  const repliedId = await getOrCreateLabel(`${c.label}/Replied`).catch(() => null);
+  const seenId = await getOrCreateLabel(`${c.label}/Seen`).catch(() => null);
 
-  let list;
-  try { list = await gapi(`/messages?labelIds=${labelId}&labelIds=UNREAD&maxResults=10`); }
-  catch (e) { console.warn("Gmail list failed:", e.message); return; }
-  const ids = (list.messages || []).map((m) => m.id);
-  if (!ids.length) return;
+  // Two sources of work: (1) mail you tagged with the label by hand — always answered (force
+  // override); (2) recent unread INBOX mail — the "reply to every human with a real query" flow.
+  // The newer_than window + /Replied and /Seen labels keep this off the old backlog; warmup /
+  // cold-outreach that skips the inbox never appears here.
+  const work = new Map(); // id -> { manual }
+  try {
+    const tagged = await gapi(`/messages?labelIds=${labelId}&maxResults=10`);
+    for (const m of tagged.messages || []) work.set(m.id, { manual: true });
+  } catch (e) { console.warn("Gmail label list failed:", e.message); }
+  try {
+    const q = encodeURIComponent(`in:inbox is:unread newer_than:2d -label:${c.label}/Seen -label:${c.label}/Replied`);
+    const inbox = await gapi(`/messages?q=${q}&maxResults=10`);
+    for (const m of inbox.messages || []) if (!work.has(m.id)) work.set(m.id, { manual: false });
+  } catch (e) { console.warn("Gmail inbox list failed:", e.message); }
+  if (!work.size) return;
 
-  for (const id of ids) {
+  for (const id of work.keys()) {
     try {
       const msg = await gapi(`/messages/${id}?format=full`);
       const headers = msg.payload && msg.payload.headers;
@@ -190,16 +215,58 @@ async function pollAndReply() {
       const date = getHeader(headers, "Date");
       const body = extractBody(msg.payload).trim();
 
-      // Skip our own mail and automated senders; mark read so we don't reprocess
-      if (fromEmail === c.user.toLowerCase() || AUTOMATED.test(from) || !body) {
-        await gapi(`/messages/${id}/modify`, { method: "POST", body: JSON.stringify({ removeLabelIds: ["UNREAD"] }) });
+      // Skip marker = drop the trigger label, tag "<label>/Seen" so it's not reprocessed, but
+      // LEAVE it unread — a skipped email you might still care about is never silently marked read.
+      const seen = () => gapi(`/messages/${id}/modify`, {
+        method: "POST",
+        body: JSON.stringify({ removeLabelIds: [labelId], addLabelIds: seenId ? [seenId] : [] }),
+      });
+      // Replied = drop the trigger label, mark read, and file under "<label>/Replied".
+      const markReplied = () => gapi(`/messages/${id}/modify`, {
+        method: "POST",
+        body: JSON.stringify({ removeLabelIds: [labelId, "UNREAD"], addLabelIds: repliedId ? [repliedId] : [] }),
+      });
+
+      // Never auto-reply to ourselves or a teammate on our own domain.
+      const ourDomain = (c.user.split("@")[1] || "").toLowerCase();
+      const senderDomain = (fromEmail.split("@")[1] || "").toLowerCase();
+      if (!body || fromEmail === c.user.toLowerCase() || (ourDomain && senderDomain === ourDomain)) {
+        await seen();
+        continue;
+      }
+
+      // "Came from a human?" — a no-reply address, mailing list, marketing blast, or an
+      // auto-generated message all count as automated and get skipped.
+      const bulk =
+        getHeader(headers, "List-Unsubscribe") ||
+        getHeader(headers, "List-Id") ||
+        /\b(bulk|list|junk|auto_reply)\b/i.test(getHeader(headers, "Precedence")) ||
+        /auto-(generated|replied|notified)/i.test(getHeader(headers, "Auto-Submitted"));
+      const automated = AUTOMATED.test(from) || !!bulk;
+
+      // clients.md policy: clients are always answered; excluded domains and
+      // PO/tracking/support subjects are skipped (unless the sender is a client).
+      const decision = classify({ fromEmail, subject, automated });
+      if (!decision.reply) {
+        console.log(`Gmail: skipped ${fromEmail} — ${decision.reason} (re "${subject}")`);
+        await seen();
+        continue;
+      }
+
+      // For non-clients, only reply when there's a genuine query — this keeps Skye out of
+      // warmup/cold-outreach filler and pleasantries when the label is applied broadly. Clients
+      // (from clients.md) are always answered, so they skip this gate.
+      if (!isClient(fromEmail) && !(await isValidInquiry(subject, body))) {
+        console.log(`Gmail: skipped ${fromEmail} — no valid query (re "${subject}")`);
+        await seen();
         continue;
       }
 
       // Contact in GHL so booking/notes/memory work, then generate the reply as Email
       let contactId = null;
       try { contactId = await upsertContactByEmail(fromEmail, from); } catch (e) { console.warn("Gmail contact upsert failed:", e.message); }
-      const reply = await chat(contactId || `gmail:${fromEmail}`, body, "Email");
+      const clientCtx = clientContext(fromEmail);
+      const reply = await chat(contactId || `gmail:${fromEmail}`, body, "Email", clientCtx);
 
       const raw = buildRawReply({
         toEmail: fromEmail,
@@ -215,12 +282,69 @@ async function pollAndReply() {
         originalDate: date,
       });
       await gapi("/messages/send", { method: "POST", body: JSON.stringify({ raw, threadId: msg.threadId }) });
-      await gapi(`/messages/${id}/modify`, { method: "POST", body: JSON.stringify({ removeLabelIds: ["UNREAD"] }) });
+      await markReplied();
       console.log(`Gmail: replied to ${fromEmail} re "${subject}"`);
     } catch (e) {
       console.error(`Gmail: failed to handle message ${id}:`, e.message);
     }
   }
+}
+
+// DRY RUN: show what the poller WOULD do with current unread inbox mail — runs the exact same
+// gates (self/team, automated, clients.md, valid-query) but sends NOTHING and changes no labels.
+// For verification via `railway run` against production credentials.
+async function inspectInbox() {
+  if (!isConfigured()) { console.log("Gmail not configured"); return; }
+  const c = cfg();
+  const ourDomain = (c.user.split("@")[1] || "").toLowerCase();
+  const q = encodeURIComponent("in:inbox is:unread newer_than:2d");
+  const list = await gapi(`/messages?q=${q}&maxResults=8`);
+  const ids = (list.messages || []).map((m) => m.id);
+  console.log(`\nUnread inbox mail (last 2 days): ${ids.length} message(s)\n`);
+  const results = [];
+  for (const id of ids) {
+    const msg = await gapi(`/messages/${id}?format=full`);
+    const headers = msg.payload && msg.payload.headers;
+    const from = getHeader(headers, "From");
+    const fromEmail = parseEmail(from);
+    const subject = getHeader(headers, "Subject") || "(no subject)";
+    const body = extractBody(msg.payload).trim();
+    const senderDomain = (fromEmail.split("@")[1] || "").toLowerCase();
+    const bulk = getHeader(headers, "List-Unsubscribe") || getHeader(headers, "List-Id") ||
+      /\b(bulk|list|junk|auto_reply)\b/i.test(getHeader(headers, "Precedence")) ||
+      /auto-(generated|replied|notified)/i.test(getHeader(headers, "Auto-Submitted"));
+    const automated = AUTOMATED.test(from) || !!bulk;
+    let verdict = "REPLY", reason;
+    if (!body || fromEmail === c.user.toLowerCase() || (ourDomain && senderDomain === ourDomain)) {
+      verdict = "SKIP"; reason = "self/team/empty";
+    } else {
+      const d = classify({ fromEmail, subject, automated });
+      if (!d.reply) { verdict = "SKIP"; reason = d.reason; }
+      else if (!isClient(fromEmail) && !(await isValidInquiry(subject, body))) { verdict = "SKIP"; reason = "no valid query"; }
+      else { reason = isClient(fromEmail) ? "client (always reply)" : "valid query"; }
+    }
+    console.log(`  [${verdict}] ${fromEmail} — "${subject.slice(0, 55)}"  → ${reason}`);
+    results.push({ verdict, from: fromEmail, subject: subject.slice(0, 80), reason });
+  }
+  console.log("");
+  return { count: ids.length, results };
+}
+
+// One-shot recovery: strip the "/Seen" marker from recent unread inbox mail so the poller takes
+// another look (used to recover mail an over-eager cutoff had skipped). Returns how many cleared.
+async function reprocessInbox() {
+  if (!isConfigured()) return { cleared: 0 };
+  const c = cfg();
+  const seenId = await getLabelId(`${c.label}/Seen`);
+  if (!seenId) return { cleared: 0 };
+  const q = encodeURIComponent(`in:inbox is:unread newer_than:3d label:${c.label}/Seen`);
+  const list = await gapi(`/messages?q=${q}&maxResults=25`);
+  const ids = (list.messages || []).map((m) => m.id);
+  for (const id of ids) {
+    await gapi(`/messages/${id}/modify`, { method: "POST", body: JSON.stringify({ removeLabelIds: [seenId] }) });
+  }
+  console.log(`Gmail reprocess: cleared /Seen from ${ids.length} inbox message(s) for another look`);
+  return { cleared: ids.length };
 }
 
 // Start the background poller (every intervalMs) if Gmail is configured.
@@ -233,4 +357,4 @@ function startGmailPoller(intervalMs = 60000) {
   setInterval(() => { pollAndReply().catch((e) => console.error("Gmail poll error:", e.message)); }, intervalMs);
 }
 
-module.exports = { isConfigured, consentUrl, exchangeCode, pollAndReply, startGmailPoller, cfg };
+module.exports = { isConfigured, consentUrl, exchangeCode, pollAndReply, inspectInbox, reprocessInbox, startGmailPoller, cfg };
