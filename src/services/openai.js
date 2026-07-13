@@ -930,9 +930,58 @@ async function composeReachinboxReengage(contactId, { firstName = "", repName = 
   return reply;
 }
 
+// Multi-touch NURTURE follow-up for a website-visitor lead who got our first email but hasn't
+// replied. `touch` is 1 (Day 3) or 2 (Day 6). Short, warm, adds a fresh angle — never a bare
+// "just checking in". Returns "Subject: <..>\n\n<body>" for GHL email send.
+async function composeFollowup(contactId, touch = 1) {
+  const directive =
+    "\n\n=== NURTURE FOLLOW-UP TASK ===\n" +
+    "This is FOLLOW-UP #" + touch + " to a website visitor who gave us their email but hasn't " +
+    "replied to your first email yet. This is a NUDGE, not a new intro — do NOT reintroduce " +
+    "yourself with 'Ian James Ormo here, founder of ScalePlus' (they already got that).\n\n" +
+    "The email MUST:\n" +
+    "- Open naturally, like a real short follow-up (e.g. 'Hey <FirstName>, circling back —').\n" +
+    "- Reference what they were looking at / their likely need (use the notes on file), and add ONE " +
+    "fresh, genuinely helpful angle or idea — a specific automation we could do for them, a quick " +
+    "thought, or a relevant result. NEVER a bare 'just checking in'.\n" +
+    (touch >= 2
+      ? "- This is the LAST nudge: be gracious, make it easy to say 'not now', and leave the door open.\n"
+      : "- Keep it light and low-pressure; make it effortless to reply.\n") +
+    "- End with ONE soft question or a simple 'want me to find a time?' — no hard sell.\n" +
+    "- Short (a few sentences), warm, human, no markdown, sign off '— Ian from ScalePlus'.\n" +
+    "FORMAT: first line exactly 'Subject: <short, specific, follow-up-style subject>', then a blank " +
+    "line, then the body.";
+
+  const contactContext = await buildContactContext(contactId).catch(() => "");
+  const notes = await getContactNotes(contactId).catch(() => []);
+  const notesText = notes.length ? "\n\nNOTES ON FILE:\n" + notes.slice(0, 8).join("\n---\n") : "";
+  const instructions = buildInstructions() + contactContext + channelNote("Email") + directive + notesText;
+  const input = [{ role: "user", content: "Write the follow-up email now." }];
+  const model = getModel();
+  const toolDefs = responsesTools(tools);
+
+  let response = await getClient().responses.create({ model, instructions, input, tools: toolDefs, max_output_tokens: 600, store: false });
+  let rounds = 0;
+  while (rounds < 5) {
+    const calls = (response.output || []).filter((o) => o.type === "function_call");
+    if (!calls.length) break;
+    rounds++;
+    input.push(...response.output);
+    for (const call of calls) {
+      const result = await runTool(call.name, call.arguments, contactId);
+      input.push({ type: "function_call_output", call_id: call.call_id, output: result });
+    }
+    response = await getClient().responses.create({ model, instructions, input, tools: toolDefs, max_output_tokens: 600, store: false });
+  }
+  const reply = stripMarkdown(response.output_text);
+  if (reply && contactId) await saveMessage(contactId, "assistant", reply);
+  return reply;
+}
+
 module.exports = {
   chat,
   composeOutreach,
+  composeFollowup,
   composeReachinboxReengage,
   isPositiveReply,
   playgroundChat,

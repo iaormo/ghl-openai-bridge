@@ -3,6 +3,7 @@ const { chat, composeOutreach, composeReachinboxReengage, isPositiveReply } = re
 const { sendReply, sendReplyHuman, sendTypingIndicator, setChannelType, setChannel, detectChannel, setEmailMeta, captureEmailThread, getChannelType } = require("../services/ghl");
 const { sendSms, parseInboundSms } = require("../services/sms");
 const { upsertContactByPhone, upsertContactByEmail, createContactNote } = require("../services/contacts");
+const nurture = require("../services/nurture");
 
 const router = express.Router();
 
@@ -129,6 +130,9 @@ router.post("/inbound", async (req, res) => {
 
     console.log(`Incoming ${channel} message from contact ${contactId}: ${message}`);
 
+    // A reply from the lead stops any nurture follow-up sequence.
+    nurture.markReplied(contactId);
+
     // Respond immediately so GHL doesn't timeout or retry
     res.json({ success: true, contactId, status: "processing" });
 
@@ -193,6 +197,10 @@ router.post("/form", async (req, res) => {
     if (email && process.env.GHL_API_KEY) {
       await sendReplyHuman(contactId, email, locationId);
       console.log(`Outreach email sent to contact ${contactId}`);
+      // Enroll website-visitor captures into the multi-touch nurture track (Day 3/6 follow-ups
+      // if they don't reply). maybeEnroll self-checks the `website-visitor` tag, so form leads
+      // and others are skipped.
+      nurture.maybeEnroll(contactId, locationId);
     } else {
       console.warn(`Outreach not sent for ${contactId} (no email text or no GHL key)`);
     }

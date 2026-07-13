@@ -8,6 +8,7 @@ const playgroundRoutes = require("./routes/playground");
 const gmail = require("./services/gmail");
 const reminders = require("./services/reminders");
 const outreach = require("./services/outreach");
+const nurture = require("./services/nurture");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -58,6 +59,7 @@ app.get("/oauth/gmail/callback", async (req, res) => {
 async function start() {
   await initDB();
   await outreach.initOutreach();
+  await nurture.initNurture();
   app.listen(PORT, () => {
     console.log(`Bridge server running on port ${PORT}`);
     console.log(`Webhook URL: http://localhost:${PORT}/webhook/inbound`);
@@ -65,6 +67,7 @@ async function start() {
     gmail.startGmailPoller(60000);
     reminders.startReminderScheduler(5 * 60 * 1000);
     outreach.startOutreachScheduler(10 * 60 * 1000);
+    nurture.startNurtureScheduler(30 * 60 * 1000);
   });
 }
 
