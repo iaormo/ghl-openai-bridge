@@ -701,9 +701,15 @@ async function composeOutreach(contactId, formContext = "") {
     "Then continue on the next lines.\n" +
     "- Show you actually read what they shared — reference a specific detail (their business, " +
     "goal, or need). Never generic.\n" +
-    "- Ask 1-2 genuine questions to understand their situation.\n" +
+    "- PROBE: ask 2-3 genuine, specific questions to understand their situation — what they do, " +
+    "where they're losing the most time day to day, what they've already tried, and what made them " +
+    "look into this now. Make it feel like you actually want to understand them, not a form.\n" +
+    "- Briefly mention what ScalePlus can do for them so they see the possibility — we build AI " +
+    "automations, chatbots, CRMs, custom web/AI systems, and full end-to-end business systems that " +
+    "run the busywork. Tie it to their likely need; DON'T dump a feature list or get salesy.\n" +
     "- End with a clear, low-pressure CTA to book the free automation audit call (offer to find a time).\n" +
-    "- Sound like a real person wrote it — short, warm, no markdown, sign off '— Ian from ScalePlus'.\n" +
+    "- Sound like a real person wrote it — warm and human, a few short paragraphs (not a wall of " +
+    "text), no markdown, sign off '— Ian from ScalePlus'.\n" +
     "FORMAT: first line exactly 'Subject: <short compelling subject>', then a blank line, then the email body.\n" +
     "Also, if the notes contain business details not yet saved as fields, save them with updateCustomField.";
 
