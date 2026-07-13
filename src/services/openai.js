@@ -154,7 +154,7 @@ Call this whenever the lead shares qualification info (business details, pain po
           customer_name: { type: "string", description: "Lead's name for the appointment title" },
           phone: { type: "string", description: "Lead's phone number (REQUIRED — ask for it before booking)" },
           email: { type: "string", description: "Lead's email address (REQUIRED — ask for it before booking; used for the confirmation)" },
-          booking_notes: { type: "string", description: "REQUIRED: the reason for the booking plus a brief summary of everything relevant from this chat — their business, industry, team size, current tools, pain points, and what they want. This is saved to the CRM for the team running the call." },
+          booking_notes: { type: "string", description: "REQUIRED: the customer's actual PROBLEM/ISSUE in their own words (the specific pain they want solved and the context you probed — what's happening now, rough volume, why it matters) PLUS a brief summary of everything relevant from this chat — their business, industry, team size, current tools, and what they want. Do NOT book with a vague or empty reason: if you have not genuinely drawn out and understood their issue yet, ask one more discovery question BEFORE calling this. This is saved to the CRM so the team walks into the call already knowing what they're auditing." },
         },
         required: ["date_time", "service", "customer_name", "phone", "email", "booking_notes"],
       },
