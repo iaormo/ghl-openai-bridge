@@ -688,9 +688,11 @@ async function composeOutreach(contactId, formContext = "") {
 
   const directive =
     "\n\n=== OUTBOUND FIRST-TOUCH TASK ===\n" +
-    "A NEW LEAD just filled out the contact form on scaleplus.io. This is your FIRST email to " +
-    "them — they have NOT messaged you, so don't write as if continuing a chat. Write a genuine, " +
-    "personalized outreach EMAIL.\n\n" +
+    "A NEW LEAD just came in from scaleplus.io — either they filled out the contact form, OR they " +
+    "dropped their email while browsing the site (the NOTES below tell you which). If they were just " +
+    "browsing/visiting, thank them for checking out ScalePlus — do NOT thank them for 'filling out a " +
+    "form' they didn't fill. This is your FIRST email to them — they have NOT messaged you, so don't " +
+    "write as if continuing a chat. Write a genuine, personalized outreach EMAIL.\n\n" +
     "WHAT THEY SUBMITTED / NOTES ON FILE:\n" + notesText + "\n" +
     (formContext ? "\nFORM DETAILS:\n" + formContext + "\n" : "") +
     "\nThe email must:\n" +
