@@ -1,8 +1,9 @@
 const express = require("express");
-const { chat, composeOutreach, composeReachinboxReengage, isPositiveReply } = require("../services/openai");
+const { chat, composeOutreach, composeSmsOutreach, composeReachinboxReengage, isPositiveReply } = require("../services/openai");
+const { sendSms8x8 } = require("../services/sms8x8");
 const { sendReply, sendReplyHuman, sendTypingIndicator, setChannelType, setChannel, detectChannel, setEmailMeta, captureEmailThread, getChannelType } = require("../services/ghl");
 const { sendSms, parseInboundSms } = require("../services/sms");
-const { upsertContactByPhone, upsertContactByEmail, createContactNote } = require("../services/contacts");
+const { upsertContactByPhone, upsertContactByEmail, createContactNote, getContactInfo } = require("../services/contacts");
 const nurture = require("../services/nurture");
 
 const router = express.Router();
@@ -188,21 +189,44 @@ router.post("/form", async (req, res) => {
     // Respond immediately so GHL doesn't retry
     res.json({ success: true, contactId, status: "sending outreach" });
 
-    // Build context from the form payload, then compose + send the email
-    const formContext = summarizeFormPayload(body);
-    setChannel(contactId, "Email");
-    setEmailMeta(contactId, { subject: "Thanks for reaching out to ScalePlus 👋", isReply: false });
+    // Which channels to reach out on. Default (no `channels`) = email, plus an organic SMS if the
+    // contact has a phone. A caller can request a subset, e.g. channels:["sms"] for SMS-only.
+    const channels = Array.isArray(body.channels) ? body.channels.map((c) => String(c).toLowerCase()) : null;
+    const doEmail = !channels || channels.includes("email");
+    const doSms = !channels || channels.includes("sms");
 
-    const email = await composeOutreach(contactId, formContext);
-    if (email && process.env.GHL_API_KEY) {
-      await sendReplyHuman(contactId, email, locationId);
-      console.log(`Outreach email sent to contact ${contactId}`);
-      // Enroll website-visitor captures into the multi-touch nurture track (Day 3/6 follow-ups
-      // if they don't reply). maybeEnroll self-checks the `website-visitor` tag, so form leads
-      // and others are skipped.
-      nurture.maybeEnroll(contactId, locationId);
-    } else {
-      console.warn(`Outreach not sent for ${contactId} (no email text or no GHL key)`);
+    const formContext = summarizeFormPayload(body);
+
+    // --- EMAIL outreach ---
+    if (doEmail) {
+      setChannel(contactId, "Email");
+      setEmailMeta(contactId, { subject: "Thanks for reaching out to ScalePlus 👋", isReply: false });
+      const email = await composeOutreach(contactId, formContext);
+      if (email && process.env.GHL_API_KEY) {
+        await sendReplyHuman(contactId, email, locationId);
+        console.log(`Outreach email sent to contact ${contactId}`);
+        // Enroll website-visitor captures into the Day 3/6 nurture track (self-checks the tag).
+        nurture.maybeEnroll(contactId, locationId);
+      } else {
+        console.warn(`Outreach not sent for ${contactId} (no email text or no GHL key)`);
+      }
+    }
+
+    // --- Organic SMS outreach (8x8), for any lead with a phone number ---
+    if (doSms) {
+      try {
+        const info = await getContactInfo(contactId).catch(() => null);
+        const phone = info && info.phone;
+        if (phone) {
+          const sms = await composeSmsOutreach(contactId, formContext);
+          if (sms) {
+            const r = await sendSms8x8(phone, sms);
+            console.log(`Organic SMS to ${contactId}: ${r.ok ? "sent" : (r.skipped ? "skipped (not configured)" : "failed")}`);
+          }
+        } else {
+          console.log(`No phone on contact ${contactId} — SMS skipped`);
+        }
+      } catch (e) { console.warn("SMS outreach failed:", e.message); }
     }
   } catch (error) {
     console.error("Form outreach error:", error);

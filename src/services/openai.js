@@ -978,9 +978,38 @@ async function composeFollowup(contactId, touch = 1) {
   return reply;
 }
 
+// Compose a SHORT, organic first-touch SMS to a lead (form submission / new contact with a phone).
+// Returns plain SMS text (no "Subject:", no markdown). Warm, human, 1-2 sentences.
+async function composeSmsOutreach(contactId, context = "") {
+  const contactContext = await buildContactContext(contactId).catch(() => "");
+  const directive =
+    "\n\n=== OUTBOUND FIRST-TOUCH SMS TASK ===\n" +
+    "Write a SHORT, warm first-touch TEXT MESSAGE (SMS) — you ARE Ian from ScalePlus texting them " +
+    "personally. This is the FIRST contact; don't write as if continuing a chat.\n\n" +
+    "CONTEXT:\n" + (context || "They just reached out via the scaleplus.io website.") + "\n\n" +
+    "Rules: ONE or TWO short sentences MAX (it's an SMS). Sound like a real person texting, not a " +
+    "marketer or a bot. Warm and genuine. If you have their name or what they need, reference it " +
+    "naturally. IMPORTANT: this is a ONE-WAY text — they CANNOT reply to it, so do NOT say 'reply', " +
+    "'text back', or 'let me know here'. If they might have questions, tell them to email " +
+    "info@scaleplus.io. No markdown, no links unless truly essential. You may end with " +
+    "'- Ian, ScalePlus' if it fits, but keep the whole thing tight. Output ONLY the SMS text.";
+  const instructions = buildInstructions() + contactContext + channelNote("SMS") + directive;
+  const input = [{ role: "user", content: "Write the SMS now." }];
+  try {
+    const response = await getClient().responses.create({
+      model: getModel(), instructions, input, max_output_tokens: 200, store: false,
+    });
+    return stripMarkdown(response.output_text || "").trim();
+  } catch (e) {
+    console.error("composeSmsOutreach failed:", e.message);
+    return "";
+  }
+}
+
 module.exports = {
   chat,
   composeOutreach,
+  composeSmsOutreach,
   composeFollowup,
   composeReachinboxReengage,
   isPositiveReply,
