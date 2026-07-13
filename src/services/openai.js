@@ -47,6 +47,32 @@ function getModel() {
   return process.env.OPENAI_MODEL || "gpt-4o-mini";
 }
 
+// Strip Markdown from replies. Every channel Skye talks on (website chat widget, Facebook/
+// Messenger, SMS, plain-text email) renders raw text, so Markdown like **bold** shows up as
+// literal asterisks. The prompt tells the model to avoid it, but gpt-4o-mini still emits it —
+// so we sanitize in code, the reliable place. Keeps the text; only removes the markup.
+function stripMarkdown(text) {
+  if (!text) return text;
+  let out = String(text);
+  // Bold / italic emphasis: ***x*** **x** *x* ___x___ __x__ _x_ → x
+  out = out
+    .replace(/\*\*\*([^*]+?)\*\*\*/g, "$1")
+    .replace(/\*\*([^*]+?)\*\*/g, "$1")
+    .replace(/(^|[^\w*])\*(?!\s)([^*\n]+?)(?<!\s)\*(?![\w*])/g, "$1$2")
+    .replace(/\*\*/g, "")           // drop any unpaired ** left over
+    .replace(/___([^_]+?)___/g, "$1")
+    .replace(/__([^_]+?)__/g, "$1");
+  // Inline code / code fences: `x` → x, ```lang → (removed)
+  out = out.replace(/```[a-zA-Z]*\n?/g, "").replace(/`([^`]+)`/g, "$1");
+  // Markdown links [text](url) → text (url); bare images ![alt](url) → url
+  out = out
+    .replace(/!\[[^\]]*\]\((https?:[^)]+)\)/g, "$1")
+    .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, "$1 ($2)");
+  // Line-start markers: headings (#), blockquotes (>) → removed
+  out = out.replace(/^[ \t]{0,3}#{1,6}[ \t]+/gm, "").replace(/^[ \t]{0,3}>[ \t]?/gm, "");
+  return out;
+}
+
 // Allow runtime model override (used by the Playground)
 function setModel(model) {
   if (model) process.env.OPENAI_MODEL = model;
@@ -640,7 +666,7 @@ async function chat(contactId, message, channel = "chat", extraContext = "") {
     });
   }
 
-  const reply = response.output_text;
+  const reply = stripMarkdown(response.output_text);
   if (!reply) throw new Error("No reply from OpenAI");
 
   await Promise.all([
@@ -702,7 +728,7 @@ async function composeOutreach(contactId, formContext = "") {
     });
   }
 
-  const reply = response.output_text;
+  const reply = stripMarkdown(response.output_text);
   if (reply) await saveMessage(contactId, "assistant", reply); // so the thread has context if they reply
   return reply;
 }
@@ -777,7 +803,7 @@ async function playgroundChat(contactId, message, opts = {}) {
     response = await getClient().responses.create(params);
   }
 
-  const reply = response.output_text;
+  const reply = stripMarkdown(response.output_text);
   if (!reply) throw new Error("No reply from OpenAI");
 
   await Promise.all([
@@ -891,7 +917,7 @@ async function composeReachinboxReengage(contactId, { firstName = "", repName = 
     response = await getClient().responses.create({ model, instructions, input, tools: toolDefs, max_output_tokens: 700, store: false });
   }
 
-  const reply = response.output_text;
+  const reply = stripMarkdown(response.output_text);
   if (reply && contactId) await saveMessage(contactId, "assistant", reply); // seed the thread for their reply
   return reply;
 }
