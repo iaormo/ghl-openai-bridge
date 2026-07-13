@@ -351,6 +351,33 @@ async function runTool(name, argsString, contactId) {
           });
         }
 
+        // CODE-ENFORCED DISCOVERY GATE: never book a call until the lead's actual problem has been
+        // probed and documented — the whole point of the audit is that we already know what we're
+        // auditing. Accept the booking only if EITHER a real `pain_points` field is on the contact
+        // OR booking_notes carries substantive problem context (not just an echo of the service
+        // title). The prompt asks for this, but a weak model skips it when the lead says "just book
+        // it" — so we enforce it here the same way we enforce email/phone.
+        let latestContact = contact;
+        try { latestContact = await getContactInfo(bookingContactId); } catch (_) {}
+        const painField = ((latestContact && latestContact.customFields) || []).find(
+          (f) => f.key === "pain_points" && String(f.value || "").trim() !== ""
+        );
+        const stripKey = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+        const bnotes = String(args.booking_notes || "").trim();
+        const notesSubstantive = bnotes.length >= 60 && stripKey(bnotes) !== stripKey(args.service);
+        if (!painField && !notesSubstantive) {
+          return JSON.stringify({
+            error:
+              "DISCOVERY_REQUIRED: You haven't probed the lead's actual problem yet, so there's " +
+              "nothing real to brief the team with. BEFORE booking, ask what their single biggest " +
+              "bottleneck/issue is plus a bit of context (what's happening now, rough volume, why it " +
+              "matters). Then call addContactNote AND updateCustomField('pain_points', ...) to " +
+              "document it, put their problem into booking_notes, and call appointmentBooking again. " +
+              "Do this even if the lead says 'just book it' — one quick question is required so the " +
+              "call is worth their time.",
+          });
+        }
+
         // CODE-ENFORCED slot validation: the model cannot book (or confirm) a time that isn't
         // an actual open slot. If the pick is invalid, refuse and hand back the REAL open times.
         const check = await isSlotAvailable(args.date_time);
