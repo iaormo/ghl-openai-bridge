@@ -17,6 +17,15 @@ const {
   getContactNotes,
 } = require("./contacts");
 const { getBrain } = require("./brain");
+const {
+  isWebSession,
+  getSession,
+  resolve: resolveWebContact,
+  ensureGhlContact,
+  bufferField,
+  bufferNote,
+  bufferedContact,
+} = require("./websession");
 
 let openai = null;
 
@@ -204,6 +213,12 @@ function responsesTools(activeTools) {
 async function runTool(name, argsString, contactId) {
   const args = JSON.parse(argsString || "{}");
 
+  // Website chat visitors arrive with a synthetic "scaleplus-web-*" contactId that has no GHL
+  // contact behind it. For those sessions we buffer captured data and lazily create a real GHL
+  // contact once we have an email/phone (see websession.js). `web` is null for real GHL contacts
+  // (webhook/SMS), so their behaviour is unchanged.
+  const web = isWebSession(contactId) ? getSession(contactId) : null;
+
   try {
     switch (name) {
       case "getCurrentDate": {
@@ -221,21 +236,46 @@ async function runTool(name, argsString, contactId) {
       }
 
       case "getContactInformation": {
-        const info = await getContactInfo(contactId);
+        if (web && !web.ghlId) return JSON.stringify(bufferedContact(contactId));
+        const info = await getContactInfo(web ? web.ghlId : contactId);
         return JSON.stringify(info);
       }
 
       case "updateContactInfo": {
+        if (web) {
+          // Learning name/email/phone is what lets us create the real contact. If we now have an
+          // email or phone, this creates it and flushes everything buffered so far.
+          const id = await ensureGhlContact(contactId, args);
+          return JSON.stringify(id ? { success: true, contactId: id } : { success: true, buffered: true });
+        }
         const result = await updateContactInfo(contactId, args);
         return JSON.stringify(result);
       }
 
       case "updateCustomField": {
+        if (web) {
+          const id = web.ghlId || (await ensureGhlContact(contactId));
+          if (!id) {
+            bufferField(contactId, args.key, args.value);
+            return JSON.stringify({ success: true, buffered: true, key: args.key, value: args.value });
+          }
+          const result = await updateCustomField(id, args.key, args.value);
+          return JSON.stringify(result);
+        }
         const result = await updateCustomField(contactId, args.key, args.value);
         return JSON.stringify(result);
       }
 
       case "addContactNote": {
+        if (web) {
+          const id = web.ghlId || (await ensureGhlContact(contactId));
+          if (!id) {
+            bufferNote(contactId, `📝 ${args.note}`);
+            return JSON.stringify({ success: true, buffered: true });
+          }
+          await createContactNote(id, `📝 ${args.note}`);
+          return JSON.stringify({ success: true });
+        }
         await createContactNote(contactId, `📝 ${args.note}`);
         return JSON.stringify({ success: true });
       }
@@ -250,9 +290,9 @@ async function runTool(name, argsString, contactId) {
         // HARD REQUIREMENT: email + phone must be known (from args or the contact record)
         // before any booking goes through.
         let contact = null;
-        try { contact = await getContactInfo(contactId); } catch (_) {}
-        const email = args.email || (contact && contact.email) || "";
-        const phone = args.phone || (contact && contact.phone) || "";
+        try { if (!web || web.ghlId) contact = await getContactInfo(web ? web.ghlId : contactId); } catch (_) {}
+        const email = args.email || (contact && contact.email) || (web && web.profile.email) || "";
+        const phone = args.phone || (contact && contact.phone) || (web && web.profile.phone) || "";
         if (!email || !phone) {
           const missing = [!email && "email", !phone && "phone number"].filter(Boolean).join(" and ");
           return JSON.stringify({
@@ -260,9 +300,23 @@ async function runTool(name, argsString, contactId) {
           });
         }
 
+        // For a website visitor, create (or resolve) the real GHL contact now — booking, notes and
+        // reminders all need a real id. We have email + phone at this point, so this always resolves.
+        let bookingContactId = contactId;
+        if (web) {
+          const id = await ensureGhlContact(contactId, { name: args.customer_name, email, phone });
+          if (!id) {
+            return JSON.stringify({
+              error: "BOOKING_REFUSED: could not create the lead's contact record (need a valid email or phone). Ask for a valid email and phone, then book again.",
+            });
+          }
+          bookingContactId = id;
+          try { contact = await getContactInfo(id); } catch (_) {}
+        }
+
         // Sync the details onto the contact record so GHL confirmations/reminders work
         try {
-          await updateContactInfo(contactId, {
+          await updateContactInfo(bookingContactId, {
             name: args.customer_name,
             phone: args.phone,
             email: args.email,
@@ -274,7 +328,7 @@ async function runTool(name, argsString, contactId) {
         // DUPLICATE GUARD: if this contact already has an upcoming audit call, never create a
         // second one — and never tell them a slot is "unavailable" when it's their OWN booking.
         let existingAppts = [];
-        try { existingAppts = await getContactAppointments(contactId); } catch (_) {}
+        try { existingAppts = await getContactAppointments(bookingContactId); } catch (_) {}
         if (existingAppts.length) {
           const target = new Date(args.date_time).getTime();
           const same = existingAppts.find((a) => {
@@ -328,9 +382,9 @@ async function runTool(name, argsString, contactId) {
         // Re-fetch the contact so the note captures the latest qualification fields saved
         // earlier in this same conversation.
         let freshContact = contact;
-        try { freshContact = await getContactInfo(contactId); } catch (_) {}
+        try { freshContact = await getContactInfo(bookingContactId); } catch (_) {}
 
-        const result = await bookAppointment(contactId, args.date_time, title, notes);
+        const result = await bookAppointment(bookingContactId, args.date_time, title, notes);
 
         // Log a COMPLETE booking note on the contact: booking details + full lead profile
         // (every saved custom field) + the chat summary — so the team is fully briefed.
@@ -365,7 +419,7 @@ async function runTool(name, argsString, contactId) {
             `LEAD PROFILE\n${profile || "• (none captured yet)"}\n\n` +
             `REASON FOR BOOKING / CHAT SUMMARY\n${notes}`;
 
-          await createContactNote(contactId, noteBody);
+          await createContactNote(bookingContactId, noteBody);
         } catch (err) {
           console.warn("Booking note creation failed (non-fatal):", err.message);
         }
@@ -378,7 +432,8 @@ async function runTool(name, argsString, contactId) {
       }
 
       case "getContactAppointments": {
-        const appts = await getContactAppointments(contactId);
+        if (web && !web.ghlId) return JSON.stringify([]); // anonymous visitor has no bookings yet
+        const appts = await getContactAppointments(web ? web.ghlId : contactId);
         return JSON.stringify(appts);
       }
 
@@ -450,9 +505,13 @@ function withTimeout(promise, ms) {
 
 async function buildContactContext(contactId) {
   if (!contactId || !process.env.GHL_API_KEY) return "";
+  // For an anonymous website session, prefetch only makes sense once a real GHL contact exists.
+  // Resolve the synthetic id to the real one; if there's none yet, skip (the buffer/tools cover it).
+  const realId = isWebSession(contactId) ? resolveWebContact(contactId) : contactId;
+  if (!realId) return "";
   const [info, appts] = await Promise.all([
-    withTimeout(getContactInfo(contactId), CONTEXT_PREFETCH_TIMEOUT_MS).catch(() => null),
-    withTimeout(getContactAppointments(contactId), CONTEXT_PREFETCH_TIMEOUT_MS).catch(() => null),
+    withTimeout(getContactInfo(realId), CONTEXT_PREFETCH_TIMEOUT_MS).catch(() => null),
+    withTimeout(getContactAppointments(realId), CONTEXT_PREFETCH_TIMEOUT_MS).catch(() => null),
   ]);
   if (!info && !appts) return "";
 

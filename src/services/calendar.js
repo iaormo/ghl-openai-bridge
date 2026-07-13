@@ -11,10 +11,12 @@ function headers() {
   };
 }
 
-// Parse YYYY-MM-DD as local midnight timestamp (not UTC)
+// Manila midnight for a YYYY-MM-DD string — correct regardless of the SERVER's timezone.
+// (Using server-local `new Date(y,m,d)` broke slot windows on the UTC Railway host: it shifted
+// each day's window by +8h, so free-slots returned the wrong day's times, "6:00 AM" leaked in
+// from the next day, and valid slots failed to validate/book. Asia/Manila is a fixed +08:00.)
 function dateToTimestamp(dateStr) {
-  const [y, m, d] = dateStr.split("-").map(Number);
-  return new Date(y, m - 1, d).getTime();
+  return new Date(`${dateStr}T00:00:00+08:00`).getTime();
 }
 
 // Format a date string for display in Manila time
@@ -40,44 +42,58 @@ function formatDisplay(dateStr) {
   };
 }
 
-// Get available slots for a date range
-async function getAvailableSlots(startDate, endDate) {
-  const start = dateToTimestamp(startDate);
-  const endPlusOne = dateToTimestamp(endDate) + 86400000;
-
-  const url = `${GHL_API_BASE}/calendars/${CALENDAR_ID}/free-slots?startDate=${start}&endDate=${endPlusOne}&timezone=${TIMEZONE}`;
+// Fetch + shape open slots for an epoch-ms range. Days with no openings are omitted.
+async function fetchSlotsRange(startTs, endTs) {
+  const url = `${GHL_API_BASE}/calendars/${CALENDAR_ID}/free-slots?startDate=${startTs}&endDate=${endTs}&timezone=${TIMEZONE}`;
   const response = await fetch(url, { headers: headers() });
-
   if (!response.ok) {
     const err = await response.text();
     throw new Error(`Failed to get slots: ${err}`);
   }
-
   const data = await response.json();
   const result = {};
   for (const [date, info] of Object.entries(data)) {
     if (date === "traceId") continue;
-    const all = (info.slots || []).map((slot) => {
-      const d = new Date(slot);
-      return {
-        iso: slot,
-        display: d.toLocaleTimeString("en-PH", {
-          hour: "numeric",
-          minute: "2-digit",
-          hour12: true,
-          timeZone: TIMEZONE,
-        }),
-      };
-    });
+    const all = (info.slots || []).map((slot) => ({
+      iso: slot,
+      display: new Date(slot).toLocaleTimeString("en-PH", {
+        hour: "numeric", minute: "2-digit", hour12: true, timeZone: TIMEZONE,
+      }),
+    }));
+    if (!all.length) continue; // skip days with no openings
     // Offer just 3 evenly-spread options (morning / midday / afternoon-evening) so the bot
-    // suggests a few clean choices instead of dumping 30+ times. Full count kept for context.
+    // suggests a few clean choices instead of dumping 30+ times.
     const MAX = 3;
     let picked = all;
     if (all.length > MAX) {
       const step = (all.length - 1) / (MAX - 1);
       picked = Array.from({ length: MAX }, (_, i) => all[Math.round(i * step)]);
     }
-    result[date] = { totalAvailable: all.length, options: picked };
+    result[date] = {
+      // Human day label so the bot names the ACTUAL day it's offering (not "tomorrow").
+      label: new Date(date + "T12:00:00+08:00").toLocaleDateString("en-PH", {
+        weekday: "long", month: "long", day: "numeric", timeZone: TIMEZONE,
+      }),
+      totalAvailable: all.length,
+      options: picked,
+    };
+  }
+  return result;
+}
+
+// Get open slots for a date range. If the requested range has NO openings — e.g. the calendar
+// requires advance notice so today/tomorrow are closed, or those days are already full — this
+// AUTO-WIDENS forward up to 14 days and returns the next few days that actually have openings.
+// So the caller always gets real, bookable times instead of an empty {} (which used to make the
+// bot say "I can't check slots" and invent a time).
+async function getAvailableSlots(startDate, endDate) {
+  const start = dateToTimestamp(startDate);
+  const endPlusOne = dateToTimestamp(endDate) + 86400000;
+  let result = await fetchSlotsRange(start, endPlusOne);
+  if (!Object.keys(result).length) {
+    const widened = await fetchSlotsRange(start, start + 14 * 86400000);
+    result = {};
+    for (const d of Object.keys(widened).sort().slice(0, 4)) result[d] = widened[d];
   }
   return result;
 }

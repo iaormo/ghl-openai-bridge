@@ -31,6 +31,7 @@ async function initOutreach() {
       email TEXT UNIQUE NOT NULL,
       first_name TEXT,
       company TEXT,
+      linkedin TEXT,
       subject TEXT,
       opener TEXT NOT NULL,
       status TEXT DEFAULT 'queued',   -- queued | active | replied | done | error
@@ -41,6 +42,8 @@ async function initOutreach() {
       created_at TIMESTAMP DEFAULT NOW()
     )
   `);
+  // idempotent: add linkedin column if an older table exists without it
+  await db.query(`ALTER TABLE outreach_leads ADD COLUMN IF NOT EXISTS linkedin TEXT`);
   console.log("Outreach: table ready");
 }
 
@@ -63,10 +66,10 @@ async function enqueueLeads(leads = []) {
     const opener = l && (l.opener || "").toString().trim();
     if (!email || !opener) { skipped++; continue; }
     const r = await db.query(
-      `INSERT INTO outreach_leads (email, first_name, company, subject, opener)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO outreach_leads (email, first_name, company, linkedin, subject, opener)
+       VALUES ($1, $2, $3, $4, $5, $6)
        ON CONFLICT (email) DO NOTHING`,
-      [email, l.firstName || l.first_name || "", l.company || "", l.subject || DEFAULT_SUBJECT, opener]
+      [email, l.firstName || l.first_name || "", l.company || "", l.linkedin || "", l.subject || DEFAULT_SUBJECT, opener]
     );
     if (r.rowCount) added++; else skipped++;
   }

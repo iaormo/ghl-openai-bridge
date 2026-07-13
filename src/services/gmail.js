@@ -236,6 +236,17 @@ async function pollAndReply() {
         continue;
       }
 
+      // ReachInbox / email-warmup traffic uses codename display names like "Friendly-Turtle",
+      // "Vicious-Gnat", "Happy-Otter" (Capitalized Adjective-Animal, hyphenated). It's built to
+      // look human, so it slips past the "valid query" gate — never reply to it (replying pollutes
+      // your warmup network). Clients are exempt just in case.
+      const displayName = from.replace(/<[^>]+>/, "").replace(/["']/g, "").trim();
+      if (!isClient(fromEmail) && /^[A-Z][a-z]+-[A-Z][a-z]+$/.test(displayName)) {
+        console.log(`Gmail: skipped ${fromEmail} — warmup sender "${displayName}"`);
+        await seen();
+        continue;
+      }
+
       // "Came from a human?" — a no-reply address, mailing list, marketing blast, or an
       // auto-generated message all count as automated and get skipped.
       const bulk =

@@ -37,7 +37,36 @@ async function initDB() {
       updated_at TIMESTAMP DEFAULT NOW()
     )
   `);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS appointment_reminders (
+      appointment_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      sent_at TIMESTAMP DEFAULT NOW(),
+      PRIMARY KEY (appointment_id, kind)
+    )
+  `);
   console.log("Database initialized");
+}
+
+// Has a given reminder touch (confirmation / day_before / hour_before) already gone out for
+// this appointment? Used by the meeting-cadence scheduler to never double-send.
+async function wasReminderSent(appointmentId, kind) {
+  const db = getPool();
+  if (!db) return false;
+  const r = await db.query(
+    "SELECT 1 FROM appointment_reminders WHERE appointment_id = $1 AND kind = $2",
+    [appointmentId, kind]
+  );
+  return r.rowCount > 0;
+}
+
+async function markReminderSent(appointmentId, kind) {
+  const db = getPool();
+  if (!db) return;
+  await db.query(
+    "INSERT INTO appointment_reminders (appointment_id, kind) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+    [appointmentId, kind]
+  );
 }
 
 // Persist a small key/value setting (e.g. the Gmail refresh token)
@@ -89,4 +118,4 @@ async function deleteHistory(contactId) {
   return { deleted: result.rowCount };
 }
 
-module.exports = { getPool, initDB, getHistory, saveMessage, deleteHistory, setSetting, getSetting };
+module.exports = { getPool, initDB, getHistory, saveMessage, deleteHistory, setSetting, getSetting, wasReminderSent, markReminderSent };
