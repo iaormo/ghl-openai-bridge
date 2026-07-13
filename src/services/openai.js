@@ -171,7 +171,7 @@ Call this whenever the lead shares qualification info (business details, pain po
     type: "function",
     function: {
       name: "appointmentBooking",
-      description: "Book the FREE AUTOMATION AUDIT call (aka discovery/strategy call) for the lead. ONLY use this for the automation audit call — never for CRM signups (send CRM-interested leads to scaleplus.io/crm instead) or any other purpose. HARD REQUIREMENT: you must have the lead's name, PHONE, and EMAIL before calling this — the booking will be REFUSED without email and phone (they're needed for confirmations and reminders). Only call AFTER the lead has picked a specific slot you offered, and pass the exact `iso` value from getAvailableSlots as date_time.",
+      description: "Book the FREE AUTOMATION AUDIT call (aka discovery/strategy call) for the lead. ONLY use this for the automation audit call — never for CRM signups (send CRM-interested leads to https://scaleplus.io/#/crm-start instead) or any other purpose. HARD REQUIREMENT: you must have the lead's name, PHONE, and EMAIL before calling this — the booking will be REFUSED without email and phone (they're needed for confirmations and reminders). Only call AFTER the lead has picked a specific slot you offered, and pass the exact `iso` value from getAvailableSlots as date_time.",
       parameters: {
         type: "object",
         properties: {
