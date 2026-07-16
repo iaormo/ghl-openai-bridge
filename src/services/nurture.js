@@ -66,7 +66,14 @@ async function markReplied(contactId) {
 }
 
 // Send any due follow-ups.
+let nurturing = false;
 async function processNurture() {
+  if (nurturing) { console.log("Nurture: previous run still in progress — skipping this tick"); return; }
+  nurturing = true;
+  try { return await runNurture(); } finally { nurturing = false; }
+}
+
+async function runNurture() {
   const db = getPool();
   if (!db) return;
   let rows = [];
@@ -83,6 +90,15 @@ async function processNurture() {
   for (const lead of rows) {
     const contactId = lead.contact_id;
     try {
+      // Atomic claim: bumping last_sent_at drops this row out of the due-window filter, so an
+      // overlapping run can't send the same touch twice.
+      const claim = await db.query(
+        `UPDATE nurture_leads SET last_sent_at = NOW()
+         WHERE contact_id = $1 AND status = 'active' AND last_sent_at < NOW() - ($2 || ' days')::interval
+         RETURNING contact_id`,
+        [contactId, String(GAP_DAYS)]
+      );
+      if (!claim.rowCount) continue; // another run already took it
       // They may have opted out since being enrolled — check before every touch, not just at enrol.
       if (await suppression.isSuppressed(lead.email)) {
         await db.query(`UPDATE nurture_leads SET status='suppressed' WHERE contact_id=$1`, [contactId]);

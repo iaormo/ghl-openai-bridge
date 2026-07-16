@@ -180,7 +180,18 @@ const AUTOMATED = /(noreply|no-reply|mailer-daemon|postmaster|notifications?@|do
 // Reply to each real email carrying the trigger label — whether you tagged it by hand or a
 // filter applied it. Handled emails lose the trigger label (and successful replies are filed
 // under "<label>/Replied") so nothing is ever answered twice.
+// Re-entrancy guard. The poller ticks every 60s, but a single pass can take far longer than that
+// (up to 20 messages, each an OpenAI call + a Gmail send). A message isn't labelled Seen/Replied
+// until AFTER it's handled, so an overlapping pass would re-list the same unread mail and answer it
+// a second time. That's the "Skye replied twice" bug — one pass at a time, always.
+let polling = false;
 async function pollAndReply() {
+  if (polling) { console.log("Gmail: previous poll still running — skipping this tick"); return; }
+  polling = true;
+  try { return await runPoll(); } finally { polling = false; }
+}
+
+async function runPoll() {
   if (!isConfigured()) return;
   const c = cfg();
   let labelId;
@@ -237,19 +248,6 @@ async function pollAndReply() {
         continue;
       }
 
-      // An explicit opt-out ("unsubscribe", "remove me", "stop emailing me") is a legal instruction:
-      // add them to the do-not-contact list, kill any sequence they're in, and never reply — an
-      // apology or winback after an opt-out is still a commercial message. Runs before every other
-      // gate so it's honoured even for a sender we'd otherwise happily answer.
-      if (suppression.isOptOutText(body) || suppression.isOptOutText(subject)) {
-        await suppression.suppressAndStop(fromEmail, {
-          reason: "unsubscribe", source: "gmail", evidence: `${subject} — ${body.slice(0, 200)}`,
-        });
-        console.log(`Gmail: ${fromEmail} opted out — suppressed, no reply sent`);
-        await seen();
-        continue;
-      }
-
       // ReachInbox / email-warmup traffic uses codename display names like "Friendly-Turtle",
       // "Vicious-Gnat", "Happy-Otter" (Capitalized Adjective-Animal, hyphenated). It's built to
       // look human, so it slips past the "valid query" gate — never reply to it (replying pollutes
@@ -269,6 +267,23 @@ async function pollAndReply() {
         /\b(bulk|list|junk|auto_reply)\b/i.test(getHeader(headers, "Precedence")) ||
         /auto-(generated|replied|notified)/i.test(getHeader(headers, "Auto-Submitted"));
       const automated = AUTOMATED.test(from) || !!bulk;
+
+      // An explicit opt-out from a REAL PERSON ("unsubscribe", "remove me", "stop emailing me") is
+      // a legal instruction: do-not-contact them permanently, kill any sequence they're in, and
+      // never reply — an apology or winback after an opt-out is still a commercial message.
+      //
+      // Deliberately placed AFTER the warmup + bulk/automated gates: every newsletter and marketing
+      // blast carries "unsubscribe" in its footer, so checking earlier would suppress (and create a
+      // GHL contact for) every newsletter sender and pollute the warmup network. A genuine human
+      // opt-out reply carries no List-Unsubscribe/List-Id header, so it still lands here.
+      if (!automated && (suppression.isOptOutText(body) || suppression.isOptOutText(subject))) {
+        await suppression.suppressAndStop(fromEmail, {
+          reason: "unsubscribe", source: "gmail", evidence: `${subject} — ${body.slice(0, 200)}`,
+        });
+        console.log(`Gmail: ${fromEmail} opted out — suppressed, no reply sent`);
+        await seen();
+        continue;
+      }
 
       // clients.md policy: clients are always answered; excluded domains and
       // PO/tracking/support subjects are skipped (unless the sender is a client).

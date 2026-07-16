@@ -46,6 +46,9 @@ async function initOutreach() {
   // idempotent: add linkedin column if an older table exists without it
   await db.query(`ALTER TABLE outreach_leads ADD COLUMN IF NOT EXISTS linkedin TEXT`);
   await db.query(`ALTER TABLE outreach_leads ADD COLUMN IF NOT EXISTS winback_sent_at TIMESTAMP`);
+  // Crash recovery: a lead claimed as 'sending' when the process died would otherwise be stranded.
+  const stuck = await db.query(`UPDATE outreach_leads SET status = 'queued' WHERE status = 'sending' RETURNING id`);
+  if (stuck.rowCount) console.log(`Outreach: requeued ${stuck.rowCount} lead(s) stuck mid-send`);
   console.log("Outreach: table ready");
 }
 
@@ -97,7 +100,16 @@ function followupBody(stage, first) {
 
 // Send today's initial batch — runs once per Manila day, at/after SEND_HOUR.
 // Pass { force: true } to fire immediately (manual "send-now"), bypassing the hour/once-a-day gate.
+// Re-entrancy guard: a full batch takes ~33min (22 leads x 90s spacing) but the scheduler ticks
+// every 10min, so without this two or three passes overlap and re-send the same leads.
+let batching = false;
 async function sendDailyBatch(opts = {}) {
+  if (batching) { console.log("Outreach: batch already in progress — skipping this tick"); return; }
+  batching = true;
+  try { return await runDailyBatch(opts); } finally { batching = false; }
+}
+
+async function runDailyBatch(opts = {}) {
   const db = getPool();
   if (!db || !gmail.isConfigured()) return;
   const { date, hour } = nowParts();
@@ -112,6 +124,10 @@ async function sendDailyBatch(opts = {}) {
   );
   if (!rows.length) { await setSetting("outreach_last_batch_date", date); return; }
 
+  // Claim the day BEFORE sending, not after. This used to be set only once the loop finished ~33min
+  // later, so every 10min tick in between started another batch over the still-'queued' rows.
+  if (!opts.force) await setSetting("outreach_last_batch_date", date);
+
   console.log(`Outreach: sending ${rows.length} initial email(s) — ${date} ${hour}:00 ${TZ}`);
   let sent = 0;
   for (const lead of rows) {
@@ -122,6 +138,14 @@ async function sendDailyBatch(opts = {}) {
         console.log(`Outreach: skipped ${lead.email} — on the do-not-contact list`);
         continue;
       }
+      // Atomic claim: flip the row out of 'queued' before the send, so no other pass (or replica)
+      // can pick up the same lead. rowCount 0 => somebody else already has it.
+      const claim = await db.query(
+        `UPDATE outreach_leads SET status = 'sending', last_sent_at = NOW() WHERE id = $1 AND status = 'queued' RETURNING id`,
+        [lead.id]
+      );
+      if (!claim.rowCount) { console.log(`Outreach: ${lead.email} already claimed — skipping`); continue; }
+
       const res = await gmail.sendNewEmail({
         toEmail: lead.email, toName: lead.first_name, subject: lead.subject || DEFAULT_SUBJECT, body: lead.opener,
       });
@@ -136,12 +160,18 @@ async function sendDailyBatch(opts = {}) {
       await db.query(`UPDATE outreach_leads SET status = 'error' WHERE id = $1`, [lead.id]);
     }
   }
-  await setSetting("outreach_last_batch_date", date);
   console.log(`Outreach: initial batch done — ${sent}/${rows.length} sent`);
 }
 
 // Send any due follow-ups (Day 3/6/9), skipping and closing out anyone who has replied.
+let followingUp = false;
 async function processFollowups() {
+  if (followingUp) { console.log("Outreach: follow-ups already in progress — skipping this tick"); return; }
+  followingUp = true;
+  try { return await runFollowups(); } finally { followingUp = false; }
+}
+
+async function runFollowups() {
   const db = getPool();
   if (!db || !gmail.isConfigured()) return;
   const { rows } = await db.query(
@@ -152,6 +182,14 @@ async function processFollowups() {
   );
   for (const lead of rows) {
     try {
+      // Atomic claim: bumping last_sent_at drops the row out of the due-window filter, so an
+      // overlapping pass can't select and re-send the same follow-up.
+      const claim = await db.query(
+        `UPDATE outreach_leads SET last_sent_at = NOW()
+         WHERE id = $1 AND last_sent_at < NOW() - ($2 || ' days')::interval RETURNING id`,
+        [lead.id, FU_GAP_DAYS]
+      );
+      if (!claim.rowCount) continue; // another pass already took it
       if (await suppression.isSuppressed(lead.email)) {
         await db.query(`UPDATE outreach_leads SET status = 'suppressed' WHERE id = $1`, [lead.id]);
         console.log(`Outreach: ${lead.email} on the do-not-contact list — follow-ups stopped`);
@@ -197,8 +235,15 @@ function winbackBody(first) {
   return `Hi ${name},\n\nI wrote to you a while back and never heard anything, which is fair enough — timing is usually the whole thing.\n\nSince then the tracking side has moved on a fair bit. Redline went a full season on it, 18,000-odd emails, and their team basically stopped touching "where is it?" messages altogether. That's the bit I'd have led with if I'd written to you today.\n\nIf it's still not relevant, no hard feelings at all — just reply "remove" and I won't bother you again. But if the busy season is coming and those messages are piling up, I'd be glad to show you what it looks like.\n\nIan`;
 }
 
+let winbacking = false;
 async function processWinbacks() {
   if (!WINBACK_ENABLED) return;
+  if (winbacking) { console.log("Outreach: winbacks already in progress — skipping this tick"); return; }
+  winbacking = true;
+  try { return await runWinbacks(); } finally { winbacking = false; }
+}
+
+async function runWinbacks() {
   const db = getPool();
   if (!db || !gmail.isConfigured()) return;
   const { rows } = await db.query(
@@ -210,6 +255,12 @@ async function processWinbacks() {
   );
   for (const lead of rows) {
     try {
+      // Atomic claim on the dedupe key itself — one winback per lead, ever, even across replicas.
+      const claim = await db.query(
+        `UPDATE outreach_leads SET winback_sent_at = NOW() WHERE id = $1 AND winback_sent_at IS NULL RETURNING id`,
+        [lead.id]
+      );
+      if (!claim.rowCount) continue;
       if (await suppression.isSuppressed(lead.email)) {
         await db.query(`UPDATE outreach_leads SET status = 'suppressed' WHERE id = $1`, [lead.id]);
         continue;
@@ -224,7 +275,6 @@ async function processWinbacks() {
         body: winbackBody(lead.first_name),
         threadId: lead.thread_id, inReplyTo: lead.message_id_header, references: lead.message_id_header,
       });
-      await db.query(`UPDATE outreach_leads SET winback_sent_at = NOW() WHERE id = $1`, [lead.id]);
       console.log(`Outreach: winback sent to ${lead.email} (cold ${WINBACK_AFTER_DAYS}d)`);
       await sleep(SEND_SPACING_MS);
     } catch (e) {
