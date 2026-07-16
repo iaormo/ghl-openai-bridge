@@ -12,6 +12,7 @@
 
 const { getPool, getSetting, setSetting } = require("../db");
 const gmail = require("./gmail");
+const suppression = require("./suppression");
 
 const TZ = process.env.OUTREACH_TZ || "Asia/Manila";
 const SEND_HOUR = parseInt(process.env.OUTREACH_SEND_HOUR || "18", 10);
@@ -44,6 +45,7 @@ async function initOutreach() {
   `);
   // idempotent: add linkedin column if an older table exists without it
   await db.query(`ALTER TABLE outreach_leads ADD COLUMN IF NOT EXISTS linkedin TEXT`);
+  await db.query(`ALTER TABLE outreach_leads ADD COLUMN IF NOT EXISTS winback_sent_at TIMESTAMP`);
   console.log("Outreach: table ready");
 }
 
@@ -56,15 +58,20 @@ function nowParts() {
   return { date: `${p.year}-${p.month}-${p.day}`, hour: parseInt(p.hour, 10) };
 }
 
-// Accept a batch of researched leads from the Claude task. Dedupes on email.
+// Accept a batch of researched leads from the Claude task. Dedupes on email, and drops anyone on
+// the do-not-contact list — this is the gate that stops an opt-out being undone by a re-import.
 async function enqueueLeads(leads = []) {
   const db = getPool();
   if (!db) throw new Error("DB not configured");
-  let added = 0, skipped = 0;
+  let added = 0, skipped = 0, suppressed = 0;
   for (const l of Array.isArray(leads) ? leads : []) {
     const email = l && (l.email || "").toString().trim().toLowerCase();
     const opener = l && (l.opener || "").toString().trim();
     if (!email || !opener) { skipped++; continue; }
+    if (await suppression.isSuppressed(email)) {
+      console.log(`Outreach: refused to enqueue ${email} — on the do-not-contact list`);
+      suppressed++; continue;
+    }
     const r = await db.query(
       `INSERT INTO outreach_leads (email, first_name, company, linkedin, subject, opener)
        VALUES ($1, $2, $3, $4, $5, $6)
@@ -73,7 +80,7 @@ async function enqueueLeads(leads = []) {
     );
     if (r.rowCount) added++; else skipped++;
   }
-  return { added, skipped };
+  return { added, skipped, suppressed };
 }
 
 // The Day-0 body is the researched opener verbatim. Follow-ups reuse the approved templates.
@@ -109,6 +116,12 @@ async function sendDailyBatch(opts = {}) {
   let sent = 0;
   for (const lead of rows) {
     try {
+      // Last line of defence: they may have opted out after being queued.
+      if (await suppression.isSuppressed(lead.email)) {
+        await db.query(`UPDATE outreach_leads SET status = 'suppressed' WHERE id = $1`, [lead.id]);
+        console.log(`Outreach: skipped ${lead.email} — on the do-not-contact list`);
+        continue;
+      }
       const res = await gmail.sendNewEmail({
         toEmail: lead.email, toName: lead.first_name, subject: lead.subject || DEFAULT_SUBJECT, body: lead.opener,
       });
@@ -139,6 +152,11 @@ async function processFollowups() {
   );
   for (const lead of rows) {
     try {
+      if (await suppression.isSuppressed(lead.email)) {
+        await db.query(`UPDATE outreach_leads SET status = 'suppressed' WHERE id = $1`, [lead.id]);
+        console.log(`Outreach: ${lead.email} on the do-not-contact list — follow-ups stopped`);
+        continue;
+      }
       if (await gmail.threadHasExternalReply(lead.thread_id)) {
         await db.query(`UPDATE outreach_leads SET status = 'replied' WHERE id = $1`, [lead.id]);
         console.log(`Outreach: ${lead.email} replied — follow-ups stopped`);
@@ -161,6 +179,60 @@ async function processFollowups() {
   }
 }
 
+// WINBACK — one last touch for leads who went COLD, i.e. the full Day 0/3/6/9 sequence ran and
+// they never replied. These people never opted out, so re-approaching them is legitimate; anyone
+// who DID opt out is status='suppressed' and on the do-not-contact list, so they can't be selected
+// here and are re-checked before every send anyway.
+//
+// One winback per lead, ever (winback_sent_at). New angle, not "just checking in", and it carries
+// an explicit opt-out line — which routes straight back into the suppression list.
+//
+// Off by default: set OUTREACH_WINBACK_ENABLED=true once you're happy with the copy below.
+const WINBACK_ENABLED = String(process.env.OUTREACH_WINBACK_ENABLED || "false").toLowerCase() === "true";
+const WINBACK_AFTER_DAYS = parseInt(process.env.OUTREACH_WINBACK_DAYS || "60", 10);
+const WINBACK_DAILY_LIMIT = parseInt(process.env.OUTREACH_WINBACK_LIMIT || "10", 10);
+
+function winbackBody(first) {
+  const name = first || "there";
+  return `Hi ${name},\n\nI wrote to you a while back and never heard anything, which is fair enough — timing is usually the whole thing.\n\nSince then the tracking side has moved on a fair bit. Redline went a full season on it, 18,000-odd emails, and their team basically stopped touching "where is it?" messages altogether. That's the bit I'd have led with if I'd written to you today.\n\nIf it's still not relevant, no hard feelings at all — just reply "remove" and I won't bother you again. But if the busy season is coming and those messages are piling up, I'd be glad to show you what it looks like.\n\nIan`;
+}
+
+async function processWinbacks() {
+  if (!WINBACK_ENABLED) return;
+  const db = getPool();
+  if (!db || !gmail.isConfigured()) return;
+  const { rows } = await db.query(
+    `SELECT * FROM outreach_leads
+     WHERE status = 'done' AND winback_sent_at IS NULL
+       AND last_sent_at < NOW() - ($1 || ' days')::interval
+     ORDER BY last_sent_at ASC LIMIT $2`,
+    [WINBACK_AFTER_DAYS, WINBACK_DAILY_LIMIT]
+  );
+  for (const lead of rows) {
+    try {
+      if (await suppression.isSuppressed(lead.email)) {
+        await db.query(`UPDATE outreach_leads SET status = 'suppressed' WHERE id = $1`, [lead.id]);
+        continue;
+      }
+      // If they ever replied in-thread, they're not cold — never winback a real conversation.
+      if (lead.thread_id && (await gmail.threadHasExternalReply(lead.thread_id))) {
+        await db.query(`UPDATE outreach_leads SET status = 'replied' WHERE id = $1`, [lead.id]);
+        continue;
+      }
+      await gmail.sendThreadReply({
+        toEmail: lead.email, toName: lead.first_name, subject: lead.subject || DEFAULT_SUBJECT,
+        body: winbackBody(lead.first_name),
+        threadId: lead.thread_id, inReplyTo: lead.message_id_header, references: lead.message_id_header,
+      });
+      await db.query(`UPDATE outreach_leads SET winback_sent_at = NOW() WHERE id = $1`, [lead.id]);
+      console.log(`Outreach: winback sent to ${lead.email} (cold ${WINBACK_AFTER_DAYS}d)`);
+      await sleep(SEND_SPACING_MS);
+    } catch (e) {
+      console.error(`Outreach: winback failed for ${lead.email}:`, e.message);
+    }
+  }
+}
+
 // Snapshot for the status endpoint.
 async function stats() {
   const db = getPool();
@@ -177,10 +249,11 @@ function startOutreachScheduler(intervalMs = 10 * 60 * 1000) {
   const tick = async () => {
     try { await sendDailyBatch(); } catch (e) { console.error("Outreach batch error:", e.message); }
     try { await processFollowups(); } catch (e) { console.error("Outreach follow-up error:", e.message); }
+    try { await processWinbacks(); } catch (e) { console.error("Outreach winback error:", e.message); }
   };
   console.log(`Outreach scheduler started — send ${SEND_HOUR}:00 ${TZ}, up to ${DAILY_LIMIT}/day, follow-ups every ${FU_GAP_DAYS}d`);
   setInterval(tick, intervalMs);
   tick();
 }
 
-module.exports = { initOutreach, enqueueLeads, sendDailyBatch, processFollowups, stats, startOutreachScheduler };
+module.exports = { initOutreach, enqueueLeads, sendDailyBatch, processFollowups, processWinbacks, stats, startOutreachScheduler };

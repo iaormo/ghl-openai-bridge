@@ -14,6 +14,7 @@ const { chat, isValidInquiry } = require("./openai");
 const { upsertContactByEmail } = require("./contacts");
 const { classify, clientContext, isClient } = require("./clients");
 const { stripMarkdown } = require("./ghl");
+const suppression = require("./suppression");
 
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -232,6 +233,19 @@ async function pollAndReply() {
       const ourDomain = (c.user.split("@")[1] || "").toLowerCase();
       const senderDomain = (fromEmail.split("@")[1] || "").toLowerCase();
       if (!body || fromEmail === c.user.toLowerCase() || (ourDomain && senderDomain === ourDomain)) {
+        await seen();
+        continue;
+      }
+
+      // An explicit opt-out ("unsubscribe", "remove me", "stop emailing me") is a legal instruction:
+      // add them to the do-not-contact list, kill any sequence they're in, and never reply — an
+      // apology or winback after an opt-out is still a commercial message. Runs before every other
+      // gate so it's honoured even for a sender we'd otherwise happily answer.
+      if (suppression.isOptOutText(body) || suppression.isOptOutText(subject)) {
+        await suppression.suppressAndStop(fromEmail, {
+          reason: "unsubscribe", source: "gmail", evidence: `${subject} — ${body.slice(0, 200)}`,
+        });
+        console.log(`Gmail: ${fromEmail} opted out — suppressed, no reply sent`);
         await seen();
         continue;
       }

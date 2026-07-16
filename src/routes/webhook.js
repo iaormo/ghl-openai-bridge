@@ -5,6 +5,7 @@ const { sendReply, sendReplyHuman, sendTypingIndicator, setChannelType, setChann
 const { sendSms, parseInboundSms } = require("../services/sms");
 const { upsertContactByPhone, upsertContactByEmail, createContactNote, getContactInfo } = require("../services/contacts");
 const nurture = require("../services/nurture");
+const suppression = require("../services/suppression");
 
 const router = express.Router();
 
@@ -273,6 +274,15 @@ router.post("/reachinbox", async (req, res) => {
 
     const repName = repNameFromEmail(emailAccount);       // full name — for the team-facing note
     const repFirstName = repName.split(/\s+/)[0] || "";   // first name only — for the email copy
+
+    // An explicit opt-out is a legal instruction, not a lead signal: honour it before anything
+    // else, on ANY event type. Suppress permanently + kill sequences already in flight, and never
+    // reply (no ack, no apology, no winback — those are commercial messages after an opt-out).
+    if (suppression.isOptOutText(replyBody)) {
+      await suppression.suppressAndStop(leadEmail, { reason: "unsubscribe", source: "reachinbox", evidence: replyBody });
+      console.log(`ReachInbox: ${leadEmail} opted out — suppressed, no reply sent`);
+      return;
+    }
 
     // LEAD_INTERESTED is already vetted by ReachInbox. For a raw REPLY_RECEIVED, run our own
     // positive-sentiment gate so we never chase a "not interested" / unsubscribe / auto-reply.

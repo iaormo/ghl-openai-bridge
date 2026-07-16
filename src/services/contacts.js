@@ -238,6 +238,7 @@ async function upsertContactByEmail(email, name, extra = {}) {
   if (extra.phone) body.phone = String(extra.phone).replace(/[\s-]/g, "");
   if (extra.companyName) body.companyName = extra.companyName;
   if (extra.website) body.website = extra.website;
+  if (Array.isArray(extra.tags) && extra.tags.length) body.tags = extra.tags;
   if (extra.linkedin) {
     try {
       const fieldId = await ensureLocationCustomField("LinkedIn URL", "TEXT");

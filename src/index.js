@@ -9,6 +9,7 @@ const gmail = require("./services/gmail");
 const reminders = require("./services/reminders");
 const outreach = require("./services/outreach");
 const nurture = require("./services/nurture");
+const suppression = require("./services/suppression");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -58,6 +59,7 @@ app.get("/oauth/gmail/callback", async (req, res) => {
 // Start server
 async function start() {
   await initDB();
+  await suppression.initSuppression(); // before outreach/nurture — every send path depends on it
   await outreach.initOutreach();
   await nurture.initNurture();
   app.listen(PORT, () => {

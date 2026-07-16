@@ -11,6 +11,7 @@ const { getPool } = require("../db");
 const { getContactInfo } = require("./contacts");
 const { composeFollowup } = require("./openai");
 const { setChannel, setEmailMeta, sendReplyHuman } = require("./ghl");
+const suppression = require("./suppression");
 
 const GAP_DAYS = parseInt(process.env.NURTURE_GAP_DAYS || "3", 10);      // days between touches
 const MAX_TOUCHES = parseInt(process.env.NURTURE_MAX_TOUCHES || "2", 10); // Day 3, Day 6
@@ -40,6 +41,11 @@ async function maybeEnroll(contactId, locationId) {
     const info = await getContactInfo(contactId).catch(() => null);
     const tags = ((info && info.tags) || []).map((t) => String(t).toLowerCase());
     if (!tags.includes("website-visitor")) return; // not a website-visitor capture — skip
+    if (tags.includes("do-not-contact") || tags.includes("unsubscribed")) return; // opted out in the CRM
+    if (await suppression.isSuppressed((info && info.email) || "")) {
+      console.log("Nurture: refused to enrol", contactId, "— on the do-not-contact list");
+      return;
+    }
     await db.query(
       `INSERT INTO nurture_leads (contact_id, email, location_id, status, touch, last_sent_at)
        VALUES ($1, $2, $3, 'active', 0, NOW())
@@ -66,7 +72,7 @@ async function processNurture() {
   let rows = [];
   try {
     const r = await db.query(
-      `SELECT contact_id, location_id, touch FROM nurture_leads
+      `SELECT contact_id, location_id, touch, email FROM nurture_leads
        WHERE status='active' AND touch < $1 AND last_sent_at < NOW() - ($2 || ' days')::interval
        ORDER BY last_sent_at ASC LIMIT 20`,
       [MAX_TOUCHES, String(GAP_DAYS)]
@@ -77,6 +83,12 @@ async function processNurture() {
   for (const lead of rows) {
     const contactId = lead.contact_id;
     try {
+      // They may have opted out since being enrolled — check before every touch, not just at enrol.
+      if (await suppression.isSuppressed(lead.email)) {
+        await db.query(`UPDATE nurture_leads SET status='suppressed' WHERE contact_id=$1`, [contactId]);
+        console.log(`Nurture: ${lead.email} on the do-not-contact list — sequence stopped`);
+        continue;
+      }
       const nextTouch = (lead.touch || 0) + 1;
       const email = await composeFollowup(contactId, nextTouch);
       if (!email || !process.env.GHL_API_KEY) continue;
