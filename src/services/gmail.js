@@ -15,6 +15,14 @@ const { upsertContactByEmail } = require("./contacts");
 const { classify, clientContext, isClient } = require("./clients");
 const { stripMarkdown } = require("./ghl");
 const suppression = require("./suppression");
+const deliverability = require("./deliverability");
+
+// Email warm-up pools (fake conversations between mailboxes). Never answered, never counted as
+// replies. Gmail labels applied by those tools are the most reliable tell; the domains and the
+// hyphenated "Friendly-Turtle" tracking token in the body are the backstop.
+const WARMUP_LABEL_RE = /warm|pipl\.ai/i;
+const WARMUP_DOMAINS = /(^|\.)(liveinboxes\.com|orbitpipeline\.co|targetlux\.co|projectrix\.co|outreachopshub\.com|blockopedia\.net|channeladvisors\.co|magnifyo\.co)$/i;
+const WARMUP_TOKEN_RE = /\b[A-Z][a-z]{2,}-[A-Z][a-z]{2,}\b/;
 
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -199,6 +207,11 @@ async function runPoll() {
   if (!labelId) { console.warn(`Gmail label "${c.label}" not found — create it in Gmail; Skye answers anything you tag with it`); return; }
   const repliedId = await getOrCreateLabel(`${c.label}/Replied`).catch(() => null);
   const seenId = await getOrCreateLabel(`${c.label}/Seen`).catch(() => null);
+  let warmupLabelIds = new Set();
+  try {
+    const all = await gapi("/labels");
+    warmupLabelIds = new Set((all.labels || []).filter((l) => WARMUP_LABEL_RE.test(l.name || "")).map((l) => l.id));
+  } catch (_) {}
 
   // Two sources of work: (1) mail you tagged with the label by hand — always answered (force
   // override); (2) recent unread INBOX mail — the "reply to every human with a real query" flow.
@@ -239,6 +252,29 @@ async function runPoll() {
         method: "POST",
         body: JSON.stringify({ removeLabelIds: [labelId, "UNREAD"], addLabelIds: repliedId ? [repliedId] : [] }),
       });
+
+      // Bounces first: a Delivery Status Notification is a fact about OUR sending, not a
+      // conversation. Record it, suppress / quarantine the recipient, and move on.
+      if (deliverability.looksLikeDsn(fromEmail, subject)) {
+        try { await deliverability.processDsn({ subject, body, threadId: msg.threadId, messageId: id, from: fromEmail }); }
+        catch (e) { console.warn("DSN processing failed:", e.message); }
+        await seen();
+        continue;
+      }
+
+      // Warm-up pool traffic: never answered, never treated as a lead.
+      const senderDomainEarly = (fromEmail.split("@")[1] || "").toLowerCase();
+      const warmup = (msg.labelIds || []).some((l) => warmupLabelIds.has(l)) ||
+        WARMUP_DOMAINS.test(senderDomainEarly) ||
+        (!isClient(fromEmail) && WARMUP_TOKEN_RE.test(body.slice(0, 1500)));
+      if (warmup) {
+        console.log(`Gmail: skipped ${fromEmail} — warm-up pool traffic (re "${subject}")`);
+        await seen();
+        continue;
+      }
+
+      // A reply inside one of our outreach threads stops that sequence immediately.
+      try { await deliverability.noteReply(msg.threadId, fromEmail); } catch (_) {}
 
       // Never auto-reply to ourselves or a teammate on our own domain.
       const ourDomain = (c.user.split("@")[1] || "").toLowerCase();

@@ -555,6 +555,56 @@ router.post("/outreach/send-now", async (req, res) => {
   }
 });
 
+// --- Deliverability guardrails (2026-09-11 audit) ---
+const deliverability = require("../services/deliverability");
+const keyed = (req, res) => {
+  const key = process.env.OUTREACH_ENQUEUE_KEY;
+  if (!key || req.get("x-outreach-key") !== key) { res.status(401).json({ success: false, error: "unauthorized" }); return false; }
+  return true;
+};
+
+// Weekly dashboard: rolling-7-day metrics with GREEN / YELLOW / RED. Read-only, no secrets.
+router.get("/outreach/health", async (req, res) => {
+  try { res.json({ success: true, ...(await deliverability.health()) }); }
+  catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// Verify a list without enqueueing. Body: { leads: [{ email, source }] } or { emails: [...] }.
+router.post("/outreach/verify", async (req, res) => {
+  if (!keyed(req, res)) return;
+  try {
+    const outreach = require("../services/outreach");
+    const list = (req.body && (req.body.leads || req.body.emails)) || [];
+    res.json({ success: true, results: await outreach.verifyBatch(list) });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// Pause / resume are deliberate human actions. Resume optionally lowers the daily cap
+// (the plan says restart at half the previous volume): { dailyLimit: 3 }.
+router.post("/outreach/pause", async (req, res) => {
+  if (!keyed(req, res)) return;
+  await deliverability.pause((req.body && req.body.reason) || "manual pause");
+  res.json({ success: true, paused: await deliverability.pausedState() });
+});
+router.post("/outreach/resume", async (req, res) => {
+  if (!keyed(req, res)) return;
+  const h = await deliverability.health();
+  const blocking = h.red.filter((r) => !/^paused:/.test(r));
+  if (blocking.length && !(req.body && req.body.force)) {
+    return res.status(409).json({ success: false, error: "still RED", reasons: blocking });
+  }
+  await deliverability.resume({ dailyLimit: req.body && req.body.dailyLimit });
+  res.json({ success: true, health: await deliverability.health() });
+});
+
+// Postmaster Tools has no API: record the weekly spam-rate / compliance reading by hand.
+// Body: { spamRate: 0.0, compliant: true }  (spamRate as a fraction: 0.001 = 0.1%)
+router.post("/outreach/postmaster", async (req, res) => {
+  if (!keyed(req, res)) return;
+  await deliverability.recordPostmaster({ spamRate: req.body && req.body.spamRate, compliant: !(req.body && req.body.compliant === false) });
+  res.json({ success: true, health: await deliverability.health() });
+});
+
 // Read-only outreach status (counts by stage/status).
 router.get("/outreach/status", async (req, res) => {
   try {

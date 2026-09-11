@@ -1,0 +1,36 @@
+{
+  "version": "2026-09-11",
+  "note": "Bounces and dead domains found in the 2026-09-11 deliverability audit of ian@scaleplus.io (Gmail DSNs, 90 days). Applied once at startup by deliverability.seedSuppression().",
+  "addresses": [
+    { "email": "info@bishopconstructionservices.com", "reason": "hard_bounce", "evidence": "2026-09-10 domain bishopconstructionservices.com couldn't be found" },
+    { "email": "r.spencer@raspleasanton.com", "reason": "hard_bounce", "evidence": "2026-09-07 domain raspleasanton.com couldn't be found" },
+    { "email": "recruitph@peakoutsourcing.com", "reason": "hard_bounce", "evidence": "2026-09-09 address not found" },
+    { "email": "joinusdumaguete@qualfon.com", "reason": "hard_bounce", "evidence": "2026-09-09 address not found" },
+    { "email": "sales.geely.dumaguete@gatewaygroup.com.ph", "reason": "hard_bounce", "evidence": "2026-09-05 address not found" },
+    { "email": "contact@grk-enterprises.com", "reason": "hard_bounce", "evidence": "2026-09-04 address not found" },
+    { "email": "info@121edc.com", "reason": "hard_bounce", "evidence": "2026-09-04 address not found" },
+    { "email": "info@arkcons.com", "reason": "hard_bounce", "evidence": "2026-09-04 550 5.1.1 account does not exist" },
+    { "email": "stay@graceydiveresort.com", "reason": "hard_bounce", "evidence": "2026-09-08 recipient server did not accept our requests (after 48h deferral)" },
+    { "email": "info@ggcc.com.ph", "reason": "hard_bounce", "evidence": "2026-09-07 recipient server did not accept our requests (after 48h deferral)" },
+    { "email": "info@workbenchconstruction.com", "reason": "hard_bounce", "evidence": "2026-09-07 recipient server did not accept our requests (after 48h deferral)" },
+    { "email": "info@pandaicecream.net", "reason": "hard_bounce", "evidence": "2026-08-29 final failure; re-sent 2026-09-09 and deferring again" },
+    { "email": "info@cobaltaccounting.com.au", "reason": "hard_bounce", "evidence": "2026-07-28 550 address not found" },
+    { "email": "tony@redline360.com", "reason": "hard_bounce", "evidence": "2026-08-11 550 5.1.1 (client domain; this mailbox is dead, use tonyb@redline360.com)" },
+    { "email": "patrick.woodyard@nisoloshoes.com", "reason": "policy_block", "evidence": "2026-07-20 550 5.7.1 email no longer received to this inbox" },
+    { "email": "phbdteam@cognizant.com", "reason": "policy_block", "evidence": "2026-09-09 group only accepts internal senders" },
+    { "email": "info@sophi-inc.com.ph", "reason": "policy_block", "evidence": "2026-09-09 delivery loop on recipient side" },
+    { "email": "christopher@therugcompany.com", "reason": "policy_block", "evidence": "2026-07-27 only accepts messages from allowed senders" },
+    { "email": "info@am-windows.com", "reason": "invalid_domain", "evidence": "2026-09-11 deferring; domain has no MX record" },
+    { "email": "info@bolinslandscaping.com", "reason": "invalid_domain", "evidence": "2026-09-11 deferring; domain has no MX record" },
+    { "email": "info@sheridanheatingandcooling.com", "reason": "invalid_domain", "evidence": "2026-09-11 deferring; domain has no MX record" },
+    { "email": "info@familydentistryoflakeland.com", "reason": "invalid_domain", "evidence": "2026-09-11 deferring; domain has no MX record" }
+  ],
+  "domains": [
+    { "domain": "bishopconstructionservices.com", "reason": "invalid_domain", "evidence": "NXDOMAIN per Gmail DSN 2026-09-10" },
+    { "domain": "raspleasanton.com", "reason": "invalid_domain", "evidence": "NXDOMAIN per Gmail DSN 2026-09-07" },
+    { "domain": "am-windows.com", "reason": "invalid_domain", "evidence": "no MX record 2026-09-11" },
+    { "domain": "bolinslandscaping.com", "reason": "invalid_domain", "evidence": "no MX record 2026-09-11" },
+    { "domain": "sheridanheatingandcooling.com", "reason": "invalid_domain", "evidence": "no MX record 2026-09-11" },
+    { "domain": "familydentistryoflakeland.com", "reason": "invalid_domain", "evidence": "no MX record 2026-09-11" }
+  ]
+}

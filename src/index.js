@@ -60,6 +60,7 @@ app.get("/oauth/gmail/callback", async (req, res) => {
 async function start() {
   await initDB();
   await suppression.initSuppression(); // before outreach/nurture — every send path depends on it
+  await require("./services/deliverability").initDeliverability(); // bounce log, domain list, health gate
   await outreach.initOutreach();
   await nurture.initNurture();
   app.listen(PORT, () => {
@@ -68,7 +69,7 @@ async function start() {
     console.log(`Test endpoint: http://localhost:${PORT}/webhook/test`);
     gmail.startGmailPoller(60000);
     reminders.startReminderScheduler(5 * 60 * 1000);
-    outreach.startOutreachScheduler(10 * 60 * 1000);
+    outreach.startOutreachScheduler(5 * 60 * 1000);
     nurture.startNurtureScheduler(30 * 60 * 1000);
   });
 }

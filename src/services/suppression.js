@@ -27,7 +27,7 @@ const OPT_OUT = new RegExp(
     "\\bremove (?:me |us )?from\\b",
     "\\btake me off\\b",
     "\\bdo ?n[o']?t (?:contact|email|message) me\\b",
-    "\\bstop (?:emailing|contacting|messaging)\\b",
+    "\\bstop (?:emailing|contacting|messaging|sending)\\b",
     "\\bno longer (?:wish|want) to (?:receive|hear)\\b",
     "\\bdelete my (?:data|details|email|info|information)\\b",
     "\\bleave me alone\\b",
@@ -35,8 +35,23 @@ const OPT_OUT = new RegExp(
   "i"
 );
 
+// A bare one-word command is how most people actually opt out — and it's exactly what the winback
+// copy asks for ("reply 'remove'"). The phrase list above deliberately requires an object
+// ("remove ME", "remove FROM"), so a lone "remove" would sail straight through and we'd ignore an
+// opt-out we invited. Matched only against the reply's FIRST line, so quoted thread text below it
+// (which may well contain the word, including our own copy) can never trigger it.
+const BARE_OPT_OUT = /^(remove|unsubscribe|stop|opt[ -]?out)\b[\s.!]*$/i;
+
+function firstLineOf(text) {
+  return (String(text || "").split(/\r?\n/).map((l) => l.trim()).find((l) => l && !l.startsWith(">")) || "")
+    .replace(/^["'\s]+/, "")
+    .replace(/["'\s.!]+$/, "");
+}
+
 function isOptOutText(text) {
-  return OPT_OUT.test(String(text || ""));
+  const s = String(text || "");
+  if (OPT_OUT.test(s)) return true;
+  return BARE_OPT_OUT.test(firstLineOf(s));
 }
 
 const norm = (e) => String(e || "").trim().toLowerCase();
@@ -57,14 +72,22 @@ async function initSuppression() {
 
 // Is this address on the do-not-contact list? Fails CLOSED: if we can't verify (no DB, query
 // error), we report suppressed so the caller does NOT send. Never email on a maybe.
+// Reasons, all written automatically (2026-09-11 audit):
+//   unsubscribe · optout · not_interested · hard_bounce · invalid_mailbox · invalid_domain (domain
+//   table) · policy_block · complaint · client · active_lead · vendor · manual
 async function isSuppressed(email) {
   const e = norm(email);
   if (!e) return false;
+  // Clients and their colleagues are never cold-emailed, whatever any list says.
+  try { const { isClient } = require("./clients"); if (isClient(e)) return true; } catch (_) {}
   const db = getPool();
   if (!db) return false; // no DB configured at all — nothing else works either; don't block dev
   try {
     const r = await db.query("SELECT 1 FROM suppressed_contacts WHERE email = $1", [e]);
-    return r.rowCount > 0;
+    if (r.rowCount > 0) return true;
+    const d = e.split("@")[1];
+    const rd = await db.query("SELECT 1 FROM suppressed_domains WHERE domain = $1", [d]);
+    return rd.rowCount > 0;
   } catch (err) {
     console.error(`Suppression check FAILED for ${e} — refusing to send:`, err.message);
     return true; // fail closed
@@ -73,7 +96,8 @@ async function isSuppressed(email) {
 
 // Add to the do-not-contact list (idempotent) and tag them in GHL so the human CRM view matches
 // what the bot will actually do. Tagging is best-effort — the DB row is the source of truth.
-async function suppress(email, { reason = "unsubscribe", source = "", evidence = "" } = {}) {
+// Pass tag:false for bounces and bad domains: a dead mailbox has no CRM contact worth creating.
+async function suppress(email, { reason = "unsubscribe", source = "", evidence = "", tag = true } = {}) {
   const e = norm(email);
   if (!e) return false;
   const db = getPool();
@@ -86,10 +110,12 @@ async function suppress(email, { reason = "unsubscribe", source = "", evidence =
       );
     } catch (err) { console.error("Suppression write FAILED for", e, err.message); }
   }
-  try {
-    const { upsertContactByEmail } = require("./contacts");
-    await upsertContactByEmail(e, "", { tags: ["do-not-contact", "unsubscribed"] });
-  } catch (err) { console.warn("GHL do-not-contact tag failed for", e, "-", err.message); }
+  if (tag) {
+    try {
+      const { upsertContactByEmail } = require("./contacts");
+      await upsertContactByEmail(e, "", { tags: ["do-not-contact", reason === "unsubscribe" ? "unsubscribed" : reason] });
+    } catch (err) { console.warn("GHL do-not-contact tag failed for", e, "-", err.message); }
+  }
   console.log(`Suppressed ${e} (${reason}${source ? " via " + source : ""}) — will not be emailed again`);
   return true;
 }
@@ -102,7 +128,7 @@ async function stopSequences(email) {
   const db = getPool();
   if (!db || !e) return;
   try {
-    await db.query(`UPDATE outreach_leads SET status = 'suppressed' WHERE email = $1 AND status IN ('queued','active')`, [e]);
+    await db.query(`UPDATE outreach_leads SET status = 'suppressed' WHERE email = $1 AND status IN ('queued','active','quarantined','sending')`, [e]);
   } catch (err) { /* table may not exist yet — non-fatal */ }
   try {
     await db.query(`UPDATE nurture_leads SET status = 'suppressed' WHERE lower(email) = $1 AND status = 'active'`, [e]);
