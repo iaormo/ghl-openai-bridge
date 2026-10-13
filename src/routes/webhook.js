@@ -6,6 +6,7 @@ const { sendSms, parseInboundSms } = require("../services/sms");
 const { upsertContactByPhone, upsertContactByEmail, createContactNote, getContactInfo } = require("../services/contacts");
 const nurture = require("../services/nurture");
 const suppression = require("../services/suppression");
+const burst = require("../services/burst");
 
 const router = express.Router();
 
@@ -145,18 +146,22 @@ router.post("/inbound", async (req, res) => {
     // Live Chat native typing animation while the AI composes (no-op on other channels)
     sendTypingIndicator(contactId, locationId);
 
-    // For email, pull the real subject + thread id from GHL so the reply threads (Re: subject)
-    if (channel === "Email") {
-      await captureEmailThread(contactId, locationId);
-    }
+    // Messages sent in a quick burst (repeats, quick-question taps, one thought split over a
+    // few texts) are answered once, together, after the lead pauses. See services/burst.js.
+    burst.enqueue(contactId, message, async (combined) => {
+      // For email, pull the real subject + thread id from GHL so the reply threads (Re: subject)
+      if (channel === "Email") {
+        await captureEmailThread(contactId, locationId);
+      }
 
-    const reply = await chat(contactId, message, channel);
-    console.log(`AI reply for contact ${contactId}: ${reply}`);
+      const reply = await chat(contactId, combined, channel);
+      console.log(`AI reply for contact ${contactId}: ${reply}`);
 
-    if (process.env.GHL_API_KEY) {
-      await sendReplyHuman(contactId, reply, locationId);
-      console.log(`Reply sent back to GHL for contact ${contactId}`);
-    }
+      if (process.env.GHL_API_KEY) {
+        await sendReplyHuman(contactId, reply, locationId);
+        console.log(`Reply sent back to GHL for contact ${contactId}`);
+      }
+    });
   } catch (error) {
     console.error("Webhook error:", error);
     // Only send error response if headers haven't been sent yet
@@ -381,10 +386,12 @@ router.post("/sms", async (req, res) => {
     setChannel(contactId, "SMS");
     console.log(`Incoming SMS from ${from} (contact ${contactId}): ${text}`);
 
-    const reply = await chat(contactId, text, "SMS");
-    console.log(`AI SMS reply for ${from}: ${reply}`);
-    await sendSms(from, reply);
-    console.log(`SMS reply sent to ${from}`);
+    burst.enqueue(contactId, text, async (combined) => {
+      const reply = await chat(contactId, combined, "SMS");
+      console.log(`AI SMS reply for ${from}: ${reply}`);
+      await sendSms(from, reply);
+      console.log(`SMS reply sent to ${from}`);
+    });
   } catch (error) {
     console.error("SMS webhook error:", error);
     if (!res.headersSent) res.status(500).json({ error: error.message });
