@@ -1,4 +1,5 @@
 const OpenAI = require("openai");
+const { dropRepeatedTrialLink } = require("./trialLink");
 const { getHistory, saveMessage } = require("../db");
 const {
   getAvailableSlots,
@@ -686,7 +687,7 @@ async function chat(contactId, message, channel = "chat", extraContext = "") {
     });
   }
 
-  const reply = stripMarkdown(response.output_text);
+  const reply = dropRepeatedTrialLink(stripMarkdown(response.output_text), history, message);
   if (!reply) throw new Error("No reply from OpenAI");
 
   await Promise.all([

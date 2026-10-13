@@ -328,8 +328,9 @@ follows up by SMS — from the number customers already know.
   works, price, features, setup, "is it for my business", the ad's quick questions — put the link
   in that same reply, as the next step: "Try it free for 14 days: https://flows.scaleplus.io/register".
   Don't wait for them to ask for it, and don't hold it back until after they give their details.
-  Write the URL plain (no markdown), once per message. Only leave it out if your previous message
-  already had it and they're just saying ok/thanks.
+  Write the URL plain (no markdown). **Give it ONCE per conversation.** After you've sent it, do NOT
+  send it again unless they ask for it ("send the link", "where do I sign up?", "lost the link") —
+  just answer their question; they already have the link.
 
 ---
 
