@@ -1,7 +1,7 @@
 const express = require("express");
 const { chat, composeOutreach, composeSmsOutreach, composeReachinboxReengage, isPositiveReply } = require("../services/openai");
 const { sendSms8x8 } = require("../services/sms8x8");
-const { sendReply, sendReplyHuman, sendTypingIndicator, setChannelType, setChannel, detectChannel, setEmailMeta, captureEmailThread, getChannelType } = require("../services/ghl");
+const { resolveChannelFromGhl, sendReply, sendReplyHuman, sendTypingIndicator, setChannelType, setChannel, detectChannel, setEmailMeta, captureEmailThread, getChannelType } = require("../services/ghl");
 const { sendSms, parseInboundSms } = require("../services/sms");
 const { upsertContactByPhone, upsertContactByEmail, createContactNote, getContactInfo } = require("../services/contacts");
 const nurture = require("../services/nurture");
@@ -109,11 +109,14 @@ router.post("/inbound", async (req, res) => {
 
     // Detect the reply channel: explicit customData.channel wins, else the workflow name
     // (workflows are named per channel), else numeric message type. Falls back to default.
-    const detected = detectChannel(body);
+    let detected = detectChannel(body);
     if (detected) {
       setChannel(contactId, detected);
-    } else if (body.message?.type) {
-      setChannelType(contactId, body.message.type);
+    } else {
+      // Unknown/absent type (e.g. SMS via the ScalePlus Flows custom provider): ask GHL which
+      // conversation this contact last wrote in, so the reply goes back on the same channel.
+      detected = await resolveChannelFromGhl(contactId, body.location?.id || body.locationId || body.location_id);
+      if (!detected && body.message?.type) setChannelType(contactId, body.message.type);
     }
 
     // For email, capture subject + thread info so the reply threads and has a subject line

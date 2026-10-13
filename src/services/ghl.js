@@ -317,7 +317,8 @@ function setChannelType(contactId, ghlMessageType) {
 // Best-effort channel detection from a GHL webhook payload. An explicit `channel` field
 // (set as custom data in the GHL workflow's webhook action) is the most reliable signal.
 function channelFromText(s) {
-  const t = String(s || "").toLowerCase();
+  // Treat underscores as separators so GHL enum names like TYPE_CUSTOM_PROVIDER_SMS match.
+  const t = String(s || "").toLowerCase().replace(/_/g, " ");
   if (!t) return null;
   if (/\bemail\b|e-?mail/.test(t)) return "Email";
   if (/whats\s?app/.test(t)) return "WhatsApp";
@@ -352,4 +353,26 @@ function detectChannel(body) {
   return channelFromText(body.message?.type || body.lastMessageType || body.last_message_type || body.type);
 }
 
-module.exports = { sendReply, sendReplyHuman, sendTypingIndicator, sendQuickAck, shouldAck, setChannelType, setChannel, detectChannel, setEmailMeta, captureEmailThread, getChannelType, splitIntoBubbles, stripMarkdown };
+
+// When a webhook doesn't say which channel a message came in on (e.g. SMS from a custom provider
+// such as ScalePlus Flows, whose numeric type isn't in our map), ask GHL: the contact's most
+// recent conversation carries lastMessageType (TYPE_FACEBOOK, TYPE_CUSTOM_PROVIDER_SMS, ...).
+async function resolveChannelFromGhl(contactId, locationId) {
+  try {
+    const loc = locationId || process.env.GHL_LOCATION_ID;
+    const r = await fetch(
+      `${GHL_API_BASE}/conversations/search?locationId=${loc}&contactId=${contactId}&sort=desc&sortBy=last_message_date&limit=1`,
+      { headers: headers() }
+    );
+    if (!r.ok) return null;
+    const d = await r.json();
+    const c = (d.conversations || [])[0];
+    const ch = channelFromText(c && c.lastMessageType);
+    if (ch) channelCache.set(contactId, ch);
+    return ch;
+  } catch (_) {
+    return null;
+  }
+}
+
+module.exports = { resolveChannelFromGhl, sendReply, sendReplyHuman, sendTypingIndicator, sendQuickAck, shouldAck, setChannelType, setChannel, detectChannel, setEmailMeta, captureEmailThread, getChannelType, splitIntoBubbles, stripMarkdown };
