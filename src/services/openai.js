@@ -29,9 +29,22 @@ const {
 
 let openai = null;
 
+// OpenRouter (OpenAI-compatible, incl. the stateless Responses API) when OPENROUTER_API_KEY is set;
+// otherwise OpenAI directly. Every call here is stateless (store:false + full history), which is
+// what OpenRouter's Responses endpoint supports.
+function usingOpenRouter() {
+  return Boolean(process.env.OPENROUTER_API_KEY);
+}
+
 function getClient() {
   if (!openai) {
-    openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    openai = usingOpenRouter()
+      ? new OpenAI({
+          apiKey: process.env.OPENROUTER_API_KEY,
+          baseURL: process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1",
+          defaultHeaders: { "HTTP-Referer": "https://scaleplus.io", "X-Title": "ScalePlus Skye" },
+        })
+      : new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   }
   return openai;
 }
@@ -44,6 +57,7 @@ function setApiKey(apiKey) {
 }
 
 function getModel() {
+  if (usingOpenRouter()) return process.env.OPENROUTER_MODEL || "openai/gpt-4.1-mini";
   return process.env.OPENAI_MODEL || "gpt-4o-mini";
 }
 
@@ -75,7 +89,7 @@ function stripMarkdown(text) {
 
 // Allow runtime model override (used by the Playground)
 function setModel(model) {
-  if (model) process.env.OPENAI_MODEL = model;
+  if (model) process.env[usingOpenRouter() ? "OPENROUTER_MODEL" : "OPENAI_MODEL"] = model;
   return getModel();
 }
 
@@ -124,7 +138,7 @@ const tools = [
 - 'team_size' — number of people on their team, especially on repetitive work
 - 'current_tools' — the CRM/tools/systems they currently use
 - 'pain_points' — their biggest manual bottleneck or the thing eating their time
-- 'service_interest' — what they want (chatbot, automation, CRM, custom build, or ScalePlus CRM trial)
+- 'service_interest' — what they want (chatbot, automation, CRM, custom build, ScalePlus CRM trial, or ScalePlus Flows)
 - 'budget_timeline' — budget comfort and desired start timeline (only if it comes up naturally)
 - 'lead_status' — funnel stage: one of 'new', 'qualified', 'audit_booked', 'follow_up', 'not_a_fit'
 Call this whenever the lead shares qualification info (business details, pain points, tools, or timeline). Save each detail as it comes up.`,
