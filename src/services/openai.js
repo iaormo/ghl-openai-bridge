@@ -617,14 +617,20 @@ function normalizeUsage(usage) {
 }
 
 // Note appended to the prompt so replies fit the channel they're going to.
-function channelNote(channel) {
+function channelNote(channel, isFirst = false) {
   if (channel === "Email") {
     return "\n\nCHANNEL: You are replying by EMAIL, and in email you ARE **Ian James Ormo, founder of ScalePlus** — write in the first person AS Ian. NEVER mention 'Skye' or say you're an AI/assistant/bot in email; these emails come from Ian himself. Write like a short, warm personal email — greeting with their first name if known, a few clear sentences, and a sign-off on its own line: \"— Ian from ScalePlus\". Slightly more complete than a chat message, but concise. Plain text, no markdown.";
   }
   if (channel === "SMS") {
-    return "\n\nCHANNEL: You are replying by SMS/text. Keep it VERY short — 1-2 sentences, since texts are length-limited and cost per segment. No markdown, no sign-off, and only include a link if it's essential.";
+    return "\n\nCHANNEL: You are replying by SMS/text. Keep it VERY short — 1-2 sentences, since texts are length-limited and cost per segment. No markdown, no sign-off, and only include a link if it's essential (for a ScalePlus Flows question, the trial link https://flows.scaleplus.io/register IS essential).";
   }
-  return "\n\nCHANNEL: You are on live chat/messaging — keep it short and conversational, no email-style greeting or sign-off.";
+  const base = "\n\nCHANNEL: You are on live chat/messaging — keep it short and conversational, no email-style greeting or sign-off.";
+  // Most new Facebook/Instagram chats come from the ScalePlus Flows video ad, so a vague opener
+  // ("pwede ba to sa salon ko?") is about Flows, not ScalePlus services in general.
+  if ((channel === "FB" || channel === "IG") && isFirst) {
+    return base + "\n\nAD CONTEXT: This is a NEW " + (channel === "FB" ? "Facebook Messenger" : "Instagram") + " conversation, almost always from our ScalePlus Flows video ad. If their message is vague or says \"this/ito/to/it\" without naming a product (e.g. \"pwede ba to sa salon ko?\", \"is this for clinics?\", \"how much is this?\"), they mean ScalePlus Flows: answer about Flows and include the trial link https://flows.scaleplus.io/register. Only treat it as a general ScalePlus services question if they clearly ask for something else (a website, a chatbot, a CRM, automation of their systems).";
+  }
+  return base;
 }
 
 // Production chat — used by the GHL webhook. Uses the OpenAI Responses API.
@@ -633,7 +639,7 @@ async function chat(contactId, message, channel = "chat", extraContext = "") {
     getHistory(contactId, 20),
     buildContactContext(contactId),
   ]);
-  const instructions = buildInstructions() + contactContext + channelNote(channel) + (extraContext || "");
+  const instructions = buildInstructions() + contactContext + channelNote(channel, !history.length) + (extraContext || "");
   const model = getModel();
   const toolDefs = responsesTools(tools);
 
