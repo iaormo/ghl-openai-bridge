@@ -43,6 +43,14 @@ function uniqueMessages(messages) {
   return out;
 }
 
+// Several different messages in one burst (e.g. three quick-question taps) must all get answered,
+// not just the first, so the model is told plainly to cover each one.
+function combine(messages) {
+  if (messages.length === 1) return messages[0];
+  return "(They sent these messages in a row. Answer EVERY one of them, briefly, in a single reply.)\n" +
+    messages.map((m) => "- " + m).join("\n");
+}
+
 /**
  * Queue a message. `handler(combinedText, messages)` runs once per burst and must send the reply.
  * The latest handler wins, so the newest channel/location details are the ones used.
@@ -90,7 +98,7 @@ async function flush(contactId) {
 
   const run = (async () => {
     try {
-      await b.handler(messages.join("\n"), messages);
+      await b.handler(combine(messages), messages);
       answered.set(contactId, { keys: new Set(messages.map(normalize)), at: Date.now() });
     } catch (e) {
       console.error(`Burst reply failed for ${contactId}:`, e.message);
@@ -103,4 +111,4 @@ async function flush(contactId) {
   for (const [k, v] of answered) if (Date.now() - v.at > REPEAT_WINDOW_MS) answered.delete(k);
 }
 
-module.exports = { enqueue, normalize, uniqueMessages, _state: { pending, busy, answered } };
+module.exports = { enqueue, combine, normalize, uniqueMessages, _state: { pending, busy, answered } };
