@@ -7,6 +7,7 @@ const { upsertContactByPhone, upsertContactByEmail, createContactNote, getContac
 const nurture = require("../services/nurture");
 const suppression = require("../services/suppression");
 const burst = require("../services/burst");
+const { isCrisis } = require("../services/crisis");
 
 const router = express.Router();
 
@@ -148,6 +149,15 @@ router.post("/inbound", async (req, res) => {
 
     // Messages sent in a quick burst (repeats, quick-question taps, one thought split over a
     // few texts) are answered once, together, after the lead pauses. See services/burst.js.
+    // Someone in crisis: leave a note on the contact so a person follows up, not just the bot.
+    if (isCrisis(message)) {
+      console.error(`CRISIS FLAG: contact ${contactId} (${channel}): ${String(message).slice(0, 200)}`);
+      createContactNote(contactId,
+        `⚠️ NEEDS A HUMAN — possible crisis message on ${channel}.\n"${String(message).slice(0, 500)}"\n` +
+        `Skye replied with the NCMH Crisis Hotline (1553 / 0917-899-8727). Please message them personally.`
+      ).catch((e) => console.warn("Crisis note failed:", e.message));
+    }
+
     burst.enqueue(contactId, message, async (combined) => {
       // For email, pull the real subject + thread id from GHL so the reply threads (Re: subject)
       if (channel === "Email") {
