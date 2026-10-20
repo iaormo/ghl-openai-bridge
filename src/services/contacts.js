@@ -179,6 +179,17 @@ async function createLocationCustomField(name, dataType = "TEXT") {
 }
 
 // Create a note on a contact (used to log booking reason + chat details)
+// Add tags to a contact (GHL keeps existing tags).
+async function addContactTags(contactId, tags) {
+  const response = await fetch(`${GHL_API_BASE}/contacts/${contactId}/tags`, {
+    method: "POST",
+    headers: headers("2021-07-28"),
+    body: JSON.stringify({ tags }),
+  });
+  if (!response.ok) throw new Error(`Failed to add tags: ${await response.text()}`);
+  return response.json();
+}
+
 async function createContactNote(contactId, body) {
   const response = await fetch(
     `${GHL_API_BASE}/contacts/${contactId}/notes`,
@@ -287,4 +298,4 @@ async function getLocationCustomFields() {
   return data.customFields || [];
 }
 
-module.exports = { getContactInfo, updateContactInfo, updateCustomField, createContactNote, getContactNotes, upsertContactByPhone, upsertContactByEmail, createLocationCustomField, ensureLocationCustomField, getLocationCustomFields };
+module.exports = { addContactTags, getContactInfo, updateContactInfo, updateCustomField, createContactNote, getContactNotes, upsertContactByPhone, upsertContactByEmail, createLocationCustomField, ensureLocationCustomField, getLocationCustomFields };

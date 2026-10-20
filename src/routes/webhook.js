@@ -3,7 +3,7 @@ const { chat, composeOutreach, composeSmsOutreach, composeReachinboxReengage, is
 const { sendSms8x8 } = require("../services/sms8x8");
 const { resolveChannelFromGhl, sendReply, sendReplyHuman, sendTypingIndicator, setChannelType, setChannel, detectChannel, setEmailMeta, captureEmailThread, getChannelType } = require("../services/ghl");
 const { sendSms, parseInboundSms } = require("../services/sms");
-const { upsertContactByPhone, upsertContactByEmail, createContactNote, getContactInfo } = require("../services/contacts");
+const { upsertContactByPhone, upsertContactByEmail, createContactNote, getContactInfo, addContactTags } = require("../services/contacts");
 const nurture = require("../services/nurture");
 const suppression = require("../services/suppression");
 const burst = require("../services/burst");
@@ -144,20 +144,30 @@ router.post("/inbound", async (req, res) => {
     res.json({ success: true, contactId, status: "processing" });
 
     // --- PROCESS ASYNC (after response sent) ---
+    // A person has taken this conversation over (tag "human-only"): Skye stays quiet for good.
+    const HUMAN_TAG = "human-only";
+    const info = await getContactInfo(contactId).catch(() => null);
+    if (info && (info.tags || []).map((t) => String(t).toLowerCase()).includes(HUMAN_TAG)) {
+      console.log(`Skipping bot reply for ${contactId}: tagged ${HUMAN_TAG}`);
+      return;
+    }
+
+    // Someone in crisis: leave a note on the contact so a person follows up, not just the bot.
+    // Skye sends the hotline reply this once, then the tag hands the chat to a human.
+    if (isCrisis(message)) {
+      addContactTags(contactId, [HUMAN_TAG, "crisis"]).catch((e) => console.warn("Crisis tag failed:", e.message));
+      console.error(`CRISIS FLAG: contact ${contactId} (${channel}): ${String(message).slice(0, 200)}`);
+      createContactNote(contactId,
+        `⚠️ NEEDS A HUMAN — possible crisis message on ${channel}.\n"${String(message).slice(0, 500)}"\n` +
+        `Skye replied once with the NCMH Crisis Hotline (1553 / 0917-899-8727) and has now stopped replying (tag human-only). Please message them personally. Remove the tag to turn Skye back on.`
+      ).catch((e) => console.warn("Crisis note failed:", e.message));
+    }
+
     // Live Chat native typing animation while the AI composes (no-op on other channels)
     sendTypingIndicator(contactId, locationId);
 
     // Messages sent in a quick burst (repeats, quick-question taps, one thought split over a
     // few texts) are answered once, together, after the lead pauses. See services/burst.js.
-    // Someone in crisis: leave a note on the contact so a person follows up, not just the bot.
-    if (isCrisis(message)) {
-      console.error(`CRISIS FLAG: contact ${contactId} (${channel}): ${String(message).slice(0, 200)}`);
-      createContactNote(contactId,
-        `⚠️ NEEDS A HUMAN — possible crisis message on ${channel}.\n"${String(message).slice(0, 500)}"\n` +
-        `Skye replied with the NCMH Crisis Hotline (1553 / 0917-899-8727). Please message them personally.`
-      ).catch((e) => console.warn("Crisis note failed:", e.message));
-    }
-
     burst.enqueue(contactId, message, async (combined) => {
       // For email, pull the real subject + thread id from GHL so the reply threads (Re: subject)
       if (channel === "Email") {
