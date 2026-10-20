@@ -1,7 +1,7 @@
 const express = require("express");
 const { chat, composeOutreach, composeSmsOutreach, composeReachinboxReengage, isPositiveReply } = require("../services/openai");
 const { sendSms8x8 } = require("../services/sms8x8");
-const { resolveChannelFromGhl, sendReply, sendReplyHuman, sendTypingIndicator, setChannelType, setChannel, detectChannel, setEmailMeta, captureEmailThread, getChannelType } = require("../services/ghl");
+const { resolveChannelFromGhl, sendAttachment, sendReply, sendReplyHuman, sendTypingIndicator, setChannelType, setChannel, detectChannel, setEmailMeta, captureEmailThread, getChannelType } = require("../services/ghl");
 const { sendSms, parseInboundSms } = require("../services/sms");
 const { upsertContactByPhone, upsertContactByEmail, createContactNote, getContactInfo, addContactTags } = require("../services/contacts");
 const nurture = require("../services/nurture");
@@ -180,6 +180,19 @@ router.post("/inbound", async (req, res) => {
       if (process.env.GHL_API_KEY) {
         await sendReplyHuman(contactId, reply, locationId);
         console.log(`Reply sent back to GHL for contact ${contactId}`);
+
+        // First time Flows comes up on Messenger/Instagram, follow the answer with the 17-second
+        // demo video, once per contact (remembered with the "flows-demo-sent" tag).
+        const DEMO_URL = process.env.FLOWS_DEMO_URL || "https://scaleplus.io/media/flows-demo.mp4?v=1";
+        const tags = ((info && info.tags) || []).map((t) => String(t).toLowerCase());
+        if ((channel === "FB" || channel === "IG") && /flows/i.test(reply) && !tags.includes("flows-demo-sent") && !isCrisis(combined)) {
+          try {
+            await new Promise((r) => setTimeout(r, 1500));
+            await sendAttachment(contactId, DEMO_URL);
+            await addContactTags(contactId, ["flows-demo-sent"]);
+            console.log(`Flows demo video sent to ${contactId}`);
+          } catch (e) { console.warn("Demo video send failed:", e.message); }
+        }
       }
     });
   } catch (error) {

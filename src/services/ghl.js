@@ -172,6 +172,18 @@ async function sendReply(contactId, message, locationId) {
   return response.json();
 }
 
+// Send a media file (e.g. the Flows demo video) as its own message. FB/IG/SMS-MMS show it inline.
+async function sendAttachment(contactId, url) {
+  const type = channelCache.get(contactId) || DEFAULT_TYPE;
+  const response = await fetch(`${GHL_API_BASE}/conversations/messages`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({ type, contactId, attachments: [url] }),
+  });
+  if (!response.ok) throw new Error(`GHL attachment error (${response.status}): ${await response.text()}`);
+  return response.json();
+}
+
 // ---- Human-feel delivery: split long replies into chat bubbles sent in bursts ----
 
 // Split on sentence boundaries into chat-sized bubbles (max 3). Short replies stay whole.
@@ -375,4 +387,4 @@ async function resolveChannelFromGhl(contactId, locationId) {
   }
 }
 
-module.exports = { resolveChannelFromGhl, sendReply, sendReplyHuman, sendTypingIndicator, sendQuickAck, shouldAck, setChannelType, setChannel, detectChannel, setEmailMeta, captureEmailThread, getChannelType, splitIntoBubbles, stripMarkdown };
+module.exports = { resolveChannelFromGhl, sendAttachment, sendReply, sendReplyHuman, sendTypingIndicator, sendQuickAck, shouldAck, setChannelType, setChannel, detectChannel, setEmailMeta, captureEmailThread, getChannelType, splitIntoBubbles, stripMarkdown };
