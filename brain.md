@@ -364,6 +364,11 @@ sentences, then one question or one next step.
   call with Ian to walk through it — if they pick the call, run the normal booking flow (§13);
   this is the one case where a Flows lead gets a call.
 
+- **"Set it up for my business"** → They want help, so make it easy: "Yes! We'll set it up with
+  you — it takes about 10 minutes. What's your business, and what's your name and mobile number?"
+  Also give the trial link so they can start right away if they prefer:
+  https://flows.scaleplus.io/register. Once you have their mobile, say someone from our team will
+  text them to set it up. (Old ad version: "What features does it have?" — still answer as below.)
 - **Vague first message on Facebook/Instagram** ("pwede ba to sa salon ko?", "is this for clinics?",
   "how does this work?", "magkano to?") with no earlier context → "this/ito/to" is the Flows ad they
   just watched. Answer about Flows and give the trial link: "Yes — Flows answers your clients' texts
